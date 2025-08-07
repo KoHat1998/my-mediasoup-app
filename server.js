@@ -3,6 +3,8 @@ const http = require('http');
 const app = express();
 const server = http.createServer(app);
 
+const mediasoup = require('mediasoup'); // Add mediasoup
+
 app.get('/', (req, res) => {
     res.send('Hello mediasoup!');
 });
