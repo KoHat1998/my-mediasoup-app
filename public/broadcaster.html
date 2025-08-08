@@ -5,10 +5,10 @@
   <title>Broadcaster</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: system-ui, Arial, sans-serif; max-width: 900px; margin: 16px auto; }
-    video { width: 480px; max-width: 100%; border: 1px solid #444; border-radius: 6px; }
-    #go { margin-top: 10px; padding: 8px 14px; }
-    #status { margin-top: 10px; color: #333; }
+    body { font-family: system-ui, Arial, sans-serif; max-width: 960px; margin: 20px auto; }
+    video { width: 640px; max-width: 100%; border: 1px solid #444; border-radius: 8px; }
+    button { padding: 8px 14px; margin-top: 10px; }
+    #status { margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -17,15 +17,11 @@
   <button id="go">Go Live</button>
   <p id="status"></p>
 
-  <!-- Socket.IO client served by your server.js -->
   <script src="/socket.io/socket.io.js"></script>
-
-  <!-- Broadcaster logic -->
   <script type="module">
     import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
-
     const status = (t) => document.getElementById('status').textContent = t;
-    const socket = io();
+    const socket = io(); // connects to same origin (your HTTPS domain)
     let device, sendTransport;
 
     async function loadDevice() {
@@ -38,25 +34,27 @@
       status('Requesting camera/mic…');
       let stream;
       try {
-        // IMPORTANT: this only works on https:// or http://localhost
+        // must be HTTPS (or localhost)
         stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       } catch (e) {
-        status('Failed to get camera/mic: ' + e.message + ' (Use HTTPS or an SSH tunnel to localhost)');
+        status('Failed to get camera/mic: ' + e.message + ' (use HTTPS)');
         console.error(e);
         return;
       }
       document.getElementById('local').srcObject = stream;
 
-      status('Loaded camera. Setting up transport…');
+      status('Loading device…');
       await loadDevice();
 
+      status('Creating send transport…');
       const params = await new Promise(res => socket.emit('createSendTransport', res));
-      // Either API works; using the modern helper:
+      if (params?.error) { status(params.error); return; }
+
       sendTransport = device.createSendTransport({
         id: params.id,
         iceParameters: params.iceParameters,
         iceCandidates: params.iceCandidates,
-        dtlsParameters: params.dtlsParameters
+        dtlsParameters: params.dtlsParameters,
       });
 
       sendTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
@@ -72,7 +70,7 @@
         });
       });
 
-      status('Producing video/audio…');
+      status('Producing tracks…');
       const v = stream.getVideoTracks()[0];
       if (v) await sendTransport.produce({ track: v });
       const a = stream.getAudioTracks()[0];

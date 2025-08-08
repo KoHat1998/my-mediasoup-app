@@ -4,21 +4,24 @@ const http = require('http');
 const { Server } = require('socket.io');
 const mediasoup = require('mediasoup');
 
-const app = express();
-app.use(express.static('public')); // we'll put simple HTML/JS in /public
-
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
-
 const PORT = process.env.PORT || 3000;
-const ANNOUNCED_IP = '13.210.150.18'; // <-- change this
+// Set this to your EC2 public/elastic IP. You can also pass ANNOUNCED_IP via env.
+const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '13.210.150.18';
 const WEBRTC_MIN_PORT = 40000;
 const WEBRTC_MAX_PORT = 49999;
 
+// Basic app
+const app = express();
+app.use(express.static('public')); // serve /public directory
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
+
+// Mediasoup state
 let worker;
 let router;
-let producer = null; // we allow one broadcaster at a time for simplicity
-const consumers = new Map(); // socket.id -> [consumer, ...]
+let videoProducer = null;
+let audioProducer = null;
+const consumers = new Map(); // socket.id -> Consumer[]
 
 const mediaCodecs = [
   { kind: 'audio', mimeType: 'audio/opus', clockRate: 48000, channels: 2 },
@@ -30,10 +33,17 @@ const mediaCodecs = [
     rtcMinPort: WEBRTC_MIN_PORT,
     rtcMaxPort: WEBRTC_MAX_PORT
   });
-  router = await worker.createRouter({ mediaCodecs });
-  console.log('Mediasoup worker+router ready');
+  worker.on('died', () => {
+    console.error('mediasoup worker died, exiting in 2s...'); 
+    setTimeout(() => process.exit(1), 2000);
+  });
 
-  server.listen(PORT, () => console.log(`Server on http://0.0.0.0:${PORT}`));
+  router = await worker.createRouter({ mediaCodecs });
+
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server listening on http://0.0.0.0:${PORT}`);
+    console.log(`ANNOUNCED_IP = ${ANNOUNCED_IP}`);
+  });
 })();
 
 async function createWebRtcTransport() {
@@ -49,82 +59,116 @@ async function createWebRtcTransport() {
 io.on('connection', (socket) => {
   console.log('client connected', socket.id);
 
-  socket.on('getRtpCapabilities', async (cb) => {
+  socket.on('getRtpCapabilities', (cb) => {
     cb(router.rtpCapabilities);
   });
 
-  // Broadcaster creates a send transport
+  // Broadcaster: create send transport
   socket.on('createSendTransport', async (cb) => {
-    const transport = await createWebRtcTransport();
-    socket.data.sendTransport = transport;
-    cb({
-      id: transport.id,
-      iceParameters: transport.iceParameters,
-      iceCandidates: transport.iceCandidates,
-      dtlsParameters: transport.dtlsParameters
-    });
+    try {
+      const transport = await createWebRtcTransport();
+      socket.data.sendTransport = transport;
+      cb({
+        id: transport.id,
+        iceParameters: transport.iceParameters,
+        iceCandidates: transport.iceCandidates,
+        dtlsParameters: transport.dtlsParameters
+      });
+    } catch (err) {
+      console.error('createSendTransport error', err);
+      cb({ error: err.message });
+    }
   });
 
   socket.on('connectSendTransport', async ({ dtlsParameters }, cb) => {
-    await socket.data.sendTransport.connect({ dtlsParameters });
-    cb('ok');
+    try {
+      await socket.data.sendTransport.connect({ dtlsParameters });
+      cb('ok');
+    } catch (err) {
+      console.error('connectSendTransport error', err);
+      cb({ error: err.message });
+    }
   });
 
   socket.on('produce', async ({ kind, rtpParameters }, cb) => {
-    if (!socket.data.sendTransport) return cb({ error: 'no transport' });
-    // only one producer (video+audio tracks are two producers but from one socket)
-    const p = await socket.data.sendTransport.produce({ kind, rtpParameters });
-    // store video producer as the “broadcast” (simple rule: prefer video)
-    if (kind === 'video') producer = p;
-    p.on('transportclose', () => console.log('producer transport closed'));
-    cb({ id: p.id });
+    try {
+      if (!socket.data.sendTransport) return cb({ error: 'no send transport' });
+      const producer = await socket.data.sendTransport.produce({ kind, rtpParameters });
+
+      if (kind === 'video') {
+        if (videoProducer) {
+          try { await videoProducer.close(); } catch {}
+        }
+        videoProducer = producer;
+      } else if (kind === 'audio') {
+        if (audioProducer) {
+          try { await audioProducer.close(); } catch {}
+        }
+        audioProducer = producer;
+      }
+
+      producer.on('transportclose', () => console.log(`${kind} producer transport closed`));
+      producer.on('close', () => console.log(`${kind} producer closed`));
+
+      cb({ id: producer.id });
+    } catch (err) {
+      console.error('produce error', err);
+      cb({ error: err.message });
+    }
   });
 
-  // Viewer creates a recv transport and consumes
+  // Viewer: create receive transport
   socket.on('createRecvTransport', async (cb) => {
-    const transport = await createWebRtcTransport();
-    socket.data.recvTransport = transport;
-    cb({
-      id: transport.id,
-      iceParameters: transport.iceParameters,
-      iceCandidates: transport.iceCandidates,
-      dtlsParameters: transport.dtlsParameters
-    });
+    try {
+      const transport = await createWebRtcTransport();
+      socket.data.recvTransport = transport;
+      cb({
+        id: transport.id,
+        iceParameters: transport.iceParameters,
+        iceCandidates: transport.iceCandidates,
+        dtlsParameters: transport.dtlsParameters
+      });
+    } catch (err) {
+      console.error('createRecvTransport error', err);
+      cb({ error: err.message });
+    }
   });
 
   socket.on('connectRecvTransport', async ({ dtlsParameters }, cb) => {
-    await socket.data.recvTransport.connect({ dtlsParameters });
-    cb('ok');
+    try {
+      await socket.data.recvTransport.connect({ dtlsParameters });
+      cb('ok');
+    } catch (err) {
+      console.error('connectRecvTransport error', err);
+      cb({ error: err.message });
+    }
   });
 
   socket.on('consume', async ({ rtpCapabilities, kind }, cb) => {
     try {
-      // Find a producer of the requested kind (we keep the most recent video as “broadcast”)
-      let targetProducer = producer;
-      // NOTE: for audio you might also want to store an audio producer; keeping it simple here.
-      if (!targetProducer || targetProducer.kind !== kind) {
-        // no producer of that kind
-        return cb({ error: 'no producer' });
-      }
-      if (!router.canConsume({ producerId: targetProducer.id, rtpCapabilities })) {
+      const target = kind === 'video' ? videoProducer : audioProducer;
+      if (!target) return cb({ error: `no ${kind} producer` });
+
+      if (!router.canConsume({ producerId: target.id, rtpCapabilities })) {
         return cb({ error: 'cannot consume' });
       }
+
       const consumer = await socket.data.recvTransport.consume({
-        producerId: targetProducer.id,
+        producerId: target.id,
         rtpCapabilities,
         paused: true
       });
-      // keep track to close later
+
       const list = consumers.get(socket.id) || [];
       list.push(consumer);
       consumers.set(socket.id, list);
 
-      consumer.on('transportclose', () => console.log('consumer transport closed'));
-      consumer.on('producerclose', () => console.log('producer closed'));
+      consumer.on('transportclose', () => console.log(`${kind} consumer transport closed`));
+      consumer.on('producerclose', () => console.log(`${kind} producer closed -> consumer closed`));
 
       cb({
         id: consumer.id,
-        producerId: targetProducer.id,
+        producerId: target.id,
         kind: consumer.kind,
         rtpParameters: consumer.rtpParameters
       });
@@ -143,11 +187,10 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log('client disconnected', socket.id);
-    // cleanup
-    if (socket.data.sendTransport) socket.data.sendTransport.close();
-    if (socket.data.recvTransport) socket.data.recvTransport.close();
+    try { socket.data.sendTransport?.close(); } catch {}
+    try { socket.data.recvTransport?.close(); } catch {}
     const list = consumers.get(socket.id) || [];
-    list.forEach(c => c.close());
+    list.forEach(c => { try { c.close(); } catch {} });
     consumers.delete(socket.id);
   });
 });

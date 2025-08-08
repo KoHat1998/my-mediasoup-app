@@ -5,10 +5,10 @@
   <title>Viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: system-ui, Arial, sans-serif; max-width: 900px; margin: 16px auto; }
-    video { width: 480px; max-width: 100%; border: 1px solid #444; border-radius: 6px; }
-    #watch { margin-top: 10px; padding: 8px 14px; }
-    #status { margin-top: 10px; color: #333; }
+    body { font-family: system-ui, Arial, sans-serif; max-width: 960px; margin: 20px auto; }
+    video { width: 640px; max-width: 100%; border: 1px solid #444; border-radius: 8px; }
+    button { padding: 8px 14px; margin-top: 10px; }
+    #status { margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -20,7 +20,6 @@
   <script src="/socket.io/socket.io.js"></script>
   <script type="module">
     import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
-
     const status = (t) => document.getElementById('status').textContent = t;
     const socket = io();
     let device, recvTransport, mediaStream = new MediaStream();
@@ -31,12 +30,25 @@
       await device.load({ routerRtpCapabilities: rtpCapabilities });
     }
 
+    async function consumeKind(kind) {
+      const data = await new Promise(res => socket.emit('consume', {
+        rtpCapabilities: device.rtpCapabilities, kind
+      }, res));
+      if (data?.error) { console.warn(data.error); return null; }
+      const consumer = await recvTransport.consume(data);
+      mediaStream.addTrack(consumer.track);
+      await new Promise(res => socket.emit('resume', { consumerId: consumer.id }, res));
+      return consumer;
+    }
+
     async function watch() {
-      status('Loading capabilities…');
+      status('Loading device…');
       await loadDevice();
 
       status('Creating recv transport…');
       const params = await new Promise(res => socket.emit('createRecvTransport', res));
+      if (params?.error) { status(params.error); return; }
+
       recvTransport = device.createRecvTransport({
         id: params.id,
         iceParameters: params.iceParameters,
@@ -50,27 +62,10 @@
         );
       });
 
-      // video
       status('Consuming video…');
-      const videoData = await new Promise(res => socket.emit('consume', {
-        rtpCapabilities: device.rtpCapabilities, kind: 'video'
-      }, res));
-      if (!videoData?.error) {
-        const c = await recvTransport.consume(videoData);
-        mediaStream.addTrack(c.track);
-        await new Promise(res => socket.emit('resume', { consumerId: c.id }, res));
-      }
-
-      // audio
+      await consumeKind('video');
       status('Consuming audio…');
-      const audioData = await new Promise(res => socket.emit('consume', {
-        rtpCapabilities: device.rtpCapabilities, kind: 'audio'
-      }, res));
-      if (!audioData?.error) {
-        const c = await recvTransport.consume(audioData);
-        mediaStream.addTrack(c.track);
-        await new Promise(res => socket.emit('resume', { consumerId: c.id }, res));
-      }
+      await consumeKind('audio');
 
       document.getElementById('remote').srcObject = mediaStream;
       status('📺 Watching');
