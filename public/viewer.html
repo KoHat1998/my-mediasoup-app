@@ -1,0 +1,73 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Viewer</title>
+</head>
+<body>
+  <h1>Viewer</h1>
+  <video id="remote" autoplay playsinline controls style="width:480px;border:1px solid #444"></video>
+  <button id="watch">Watch</button>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module">
+    import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
+
+    const socket = io();
+    let device;
+    let recvTransport;
+    let mediaStream = new MediaStream();
+
+    async function loadDevice() {
+      const rtpCapabilities = await new Promise(res => socket.emit('getRtpCapabilities', res));
+      device = new mediasoupClient.Device();
+      await device.load({ routerRtpCapabilities: rtpCapabilities });
+    }
+
+    async function watch() {
+      await loadDevice();
+
+      // create recv transport
+      const params = await new Promise(res => socket.emit('createRecvTransport', res));
+      recvTransport = new mediasoupClient.Transport.RecvTransport({
+        id: params.id,
+        iceParameters: params.iceParameters,
+        iceCandidates: params.iceCandidates,
+        dtlsParameters: params.dtlsParameters,
+        direction: 'recv',
+        appData: {}
+      });
+
+      recvTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
+        socket.emit('connectRecvTransport', { dtlsParameters }, (r) => r === 'ok' ? callback() : errback(new Error('connect failed')));
+      });
+
+      // consume video
+      const videoData = await new Promise(res => socket.emit('consume', {
+        rtpCapabilities: device.rtpCapabilities,
+        kind: 'video'
+      }, res));
+      if (!videoData?.error) {
+        const consumer = await recvTransport.consume(videoData);
+        mediaStream.addTrack(consumer.track);
+        await new Promise(res => socket.emit('resume', { consumerId: consumer.id }, res));
+      }
+
+      // consume audio (optional)
+      const audioData = await new Promise(res => socket.emit('consume', {
+        rtpCapabilities: device.rtpCapabilities,
+        kind: 'audio'
+      }, res));
+      if (!audioData?.error) {
+        const consumer = await recvTransport.consume(audioData);
+        mediaStream.addTrack(consumer.track);
+        await new Promise(res => socket.emit('resume', { consumerId: consumer.id }, res));
+      }
+
+      document.getElementById('remote').srcObject = mediaStream;
+    }
+
+    document.getElementById('watch').onclick = watch;
+  </script>
+</body>
+</html>
