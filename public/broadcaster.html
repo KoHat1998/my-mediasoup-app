@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Broadcaster</title>
+</head>
+<body>
+  <h1>Broadcaster</h1>
+  <video id="local" autoplay muted playsinline style="width:480px;border:1px solid #444"></video>
+  <button id="go">Go Live</button>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module">
+    import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
+
+    const socket = io();
+    let device;
+    let sendTransport;
+
+    async function loadDevice() {
+      const rtpCapabilities = await new Promise(res => socket.emit('getRtpCapabilities', res));
+      device = new mediasoupClient.Device();
+      await device.load({ routerRtpCapabilities: rtpCapabilities });
+    }
+
+    async function start() {
+      await loadDevice();
+
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('local').srcObject = stream;
+
+      const params = await new Promise(res => socket.emit('createSendTransport', res));
+      sendTransport = new mediasoupClient.Transport.SendTransport({
+        id: params.id,
+        iceParameters: params.iceParameters,
+        iceCandidates: params.iceCandidates,
+        dtlsParameters: params.dtlsParameters,
+        iceServers: [],  // mediasoup handles ICE with server transports
+        direction: 'send',
+        // required callbacks:
+        appData: {}
+      });
+
+      sendTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
+        socket.emit('connectSendTransport', { dtlsParameters }, (r) => r === 'ok' ? callback() : errback(new Error('connect failed')));
+      });
+
+      sendTransport.on('produce', ({ kind, rtpParameters }, callback, errback) => {
+        socket.emit('produce', { kind, rtpParameters }, (data) => {
+          if (data?.error) return errback(new Error(data.error));
+          callback({ id: data.id });
+        });
+      });
+
+      // produce audio + video
+      const videoTrack = stream.getVideoTracks()[0];
+      await sendTransport.produce({ track: videoTrack });
+
+      const audioTrack = stream.getAudioTracks()[0];
+      if (audioTrack) await sendTransport.produce({ track: audioTrack });
+    }
+
+    document.getElementById('go').onclick = start;
+  </script>
+</body>
+</html>
