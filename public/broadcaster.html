@@ -8,14 +8,15 @@
   <h1>Broadcaster</h1>
   <video id="local" autoplay muted playsinline style="width:480px;border:1px solid #444"></video>
   <button id="go">Go Live</button>
+  <p id="status"></p>
 
   <script src="/socket.io/socket.io.js"></script>
   <script type="module">
     import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
+    const status = (t) => document.getElementById('status').textContent = t;
     const socket = io();
-    let device;
-    let sendTransport;
+    let device, sendTransport;
 
     async function loadDevice() {
       const rtpCapabilities = await new Promise(res => socket.emit('getRtpCapabilities', res));
@@ -24,10 +25,20 @@
     }
 
     async function start() {
-      await loadDevice();
+      status('Requesting camera/mic…');
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      } catch (e) {
+        status('Failed to get camera/mic: ' + e.message + ' (Are you on HTTPS or localhost?)');
+        console.error(e);
+        return;
+      }
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       document.getElementById('local').srcObject = stream;
+      status('Loaded camera. Setting up transport…');
+
+      await loadDevice();
 
       const params = await new Promise(res => socket.emit('createSendTransport', res));
       sendTransport = new mediasoupClient.Transport.SendTransport({
@@ -35,10 +46,7 @@
         iceParameters: params.iceParameters,
         iceCandidates: params.iceCandidates,
         dtlsParameters: params.dtlsParameters,
-        iceServers: [],  // mediasoup handles ICE with server transports
         direction: 'send',
-        // required callbacks:
-        appData: {}
       });
 
       sendTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
@@ -52,12 +60,13 @@
         });
       });
 
-      // produce audio + video
-      const videoTrack = stream.getVideoTracks()[0];
-      await sendTransport.produce({ track: videoTrack });
+      status('Producing video/audio…');
+      const v = stream.getVideoTracks()[0];
+      if (v) await sendTransport.produce({ track: v });
+      const a = stream.getAudioTracks()[0];
+      if (a) await sendTransport.produce({ track: a });
 
-      const audioTrack = stream.getAudioTracks()[0];
-      if (audioTrack) await sendTransport.produce({ track: audioTrack });
+      status('🔴 Live!');
     }
 
     document.getElementById('go').onclick = start;

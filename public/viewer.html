@@ -8,15 +8,15 @@
   <h1>Viewer</h1>
   <video id="remote" autoplay playsinline controls style="width:480px;border:1px solid #444"></video>
   <button id="watch">Watch</button>
+  <p id="status"></p>
 
   <script src="/socket.io/socket.io.js"></script>
   <script type="module">
     import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
+    const status = (t) => document.getElementById('status').textContent = t;
     const socket = io();
-    let device;
-    let recvTransport;
-    let mediaStream = new MediaStream();
+    let device, recvTransport, mediaStream = new MediaStream();
 
     async function loadDevice() {
       const rtpCapabilities = await new Promise(res => socket.emit('getRtpCapabilities', res));
@@ -25,9 +25,10 @@
     }
 
     async function watch() {
+      status('Loading capabilities…');
       await loadDevice();
 
-      // create recv transport
+      status('Creating recv transport…');
       const params = await new Promise(res => socket.emit('createRecvTransport', res));
       recvTransport = new mediasoupClient.Transport.RecvTransport({
         id: params.id,
@@ -35,36 +36,34 @@
         iceCandidates: params.iceCandidates,
         dtlsParameters: params.dtlsParameters,
         direction: 'recv',
-        appData: {}
       });
 
       recvTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
         socket.emit('connectRecvTransport', { dtlsParameters }, (r) => r === 'ok' ? callback() : errback(new Error('connect failed')));
       });
 
-      // consume video
+      status('Consuming video…');
       const videoData = await new Promise(res => socket.emit('consume', {
-        rtpCapabilities: device.rtpCapabilities,
-        kind: 'video'
+        rtpCapabilities: device.rtpCapabilities, kind: 'video'
       }, res));
       if (!videoData?.error) {
-        const consumer = await recvTransport.consume(videoData);
-        mediaStream.addTrack(consumer.track);
-        await new Promise(res => socket.emit('resume', { consumerId: consumer.id }, res));
+        const c = await recvTransport.consume(videoData);
+        mediaStream.addTrack(c.track);
+        await new Promise(res => socket.emit('resume', { consumerId: c.id }, res));
       }
 
-      // consume audio (optional)
+      status('Consuming audio…');
       const audioData = await new Promise(res => socket.emit('consume', {
-        rtpCapabilities: device.rtpCapabilities,
-        kind: 'audio'
+        rtpCapabilities: device.rtpCapabilities, kind: 'audio'
       }, res));
       if (!audioData?.error) {
-        const consumer = await recvTransport.consume(audioData);
-        mediaStream.addTrack(consumer.track);
-        await new Promise(res => socket.emit('resume', { consumerId: consumer.id }, res));
+        const c = await recvTransport.consume(audioData);
+        mediaStream.addTrack(c.track);
+        await new Promise(res => socket.emit('resume', { consumerId: c.id }, res));
       }
 
       document.getElementById('remote').srcObject = mediaStream;
+      status('📺 Watching');
     }
 
     document.getElementById('watch').onclick = watch;
