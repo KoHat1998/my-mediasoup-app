@@ -3,10 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <title>Viewer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; max-width: 900px; margin: 16px auto; }
+    video { width: 480px; max-width: 100%; border: 1px solid #444; border-radius: 6px; }
+    #watch { margin-top: 10px; padding: 8px 14px; }
+    #status { margin-top: 10px; color: #333; }
+  </style>
 </head>
 <body>
   <h1>Viewer</h1>
-  <video id="remote" autoplay playsinline controls style="width:480px;border:1px solid #444"></video>
+  <video id="remote" autoplay playsinline controls></video><br />
   <button id="watch">Watch</button>
   <p id="status"></p>
 
@@ -30,18 +37,20 @@
 
       status('Creating recv transport…');
       const params = await new Promise(res => socket.emit('createRecvTransport', res));
-      recvTransport = new mediasoupClient.Transport.RecvTransport({
+      recvTransport = device.createRecvTransport({
         id: params.id,
         iceParameters: params.iceParameters,
         iceCandidates: params.iceCandidates,
-        dtlsParameters: params.dtlsParameters,
-        direction: 'recv',
+        dtlsParameters: params.dtlsParameters
       });
 
       recvTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
-        socket.emit('connectRecvTransport', { dtlsParameters }, (r) => r === 'ok' ? callback() : errback(new Error('connect failed')));
+        socket.emit('connectRecvTransport', { dtlsParameters }, (r) =>
+          r === 'ok' ? callback() : errback(new Error('connect failed'))
+        );
       });
 
+      // video
       status('Consuming video…');
       const videoData = await new Promise(res => socket.emit('consume', {
         rtpCapabilities: device.rtpCapabilities, kind: 'video'
@@ -52,6 +61,7 @@
         await new Promise(res => socket.emit('resume', { consumerId: c.id }, res));
       }
 
+      // audio
       status('Consuming audio…');
       const audioData = await new Promise(res => socket.emit('consume', {
         rtpCapabilities: device.rtpCapabilities, kind: 'audio'
