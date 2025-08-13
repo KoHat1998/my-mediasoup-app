@@ -24,16 +24,22 @@ const consumers = new Map(); // socket.id -> Consumer[]
 const ROOM = 'main';
 
 // Add H264 for iOS/Safari (keep VP8 too)
+// server.js
 const mediaCodecs = [
   { kind: 'audio', mimeType: 'audio/opus', clockRate: 48000, channels: 2 },
-  { kind: 'video', mimeType: 'video/VP8', clockRate: 90000 },
   {
     kind: 'video',
     mimeType: 'video/H264',
     clockRate: 90000,
-    parameters: { 'level-asymmetry-allowed': 1, 'packetization-mode': 1, 'profile-level-id': '42e01f' }
-  }
+    parameters: {
+      'level-asymmetry-allowed': 1,
+      'packetization-mode': 1,
+      'profile-level-id': '42e01f' // Baseline; widely compatible on iOS
+    }
+  },
+  { kind: 'video', mimeType: 'video/VP8', clockRate: 90000 }
 ];
+;
 
 (async () => {
   worker = await mediasoup.createWorker({ rtcMinPort: WEBRTC_MIN_PORT, rtcMaxPort: WEBRTC_MAX_PORT });
