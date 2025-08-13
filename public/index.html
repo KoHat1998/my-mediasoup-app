@@ -1,14 +1,45 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>Live Stream</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="/style.css">
+  <meta charset="utf-8" />
+  <title>KoHat Live</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22/>">
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <h1>🎥 Live Stream</h1>
-  <p><a class="link-btn" href="/broadcaster.html">Go to Broadcaster</a></p>
-  <p><a class="link-btn" href="/viewer.html">Go to Viewer</a></p>
+  <header class="header">
+    <div class="brand">🎥 KoHat Live</div>
+    <nav class="nav">
+      <a href="/">Home</a>
+      <a href="/broadcaster.html">Broadcast</a>
+      <a href="/viewer.html">Watch</a>
+    </nav>
+  </header>
+
+  <main class="main">
+    <section class="card">
+      <h1>Go live in seconds.</h1>
+      <p>One host, unlimited viewers. Share your camera or your screen.</p>
+      <div class="controls" style="margin-top:12px">
+        <a class="btn" href="/broadcaster.html">Start Broadcasting</a>
+        <a class="btn ghost" href="/viewer.html">Watch Live</a>
+      </div>
+      <div class="badges" style="margin-top:12px">
+        <span class="badge">Secure (HTTPS)</span>
+        <span class="badge">WebRTC • Mediasoup</span>
+        <span class="badge">Mobile‑friendly</span>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <small>© 2025 KoHat Live</small>
+    <nav>
+      <a href="#">Terms</a>
+      <a href="#">Privacy</a>
+      <a href="#">Contact</a>
+    </nav>
+  </footer>
 </body>
 </html>

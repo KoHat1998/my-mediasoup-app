@@ -1,72 +1,98 @@
-/* General layout */
-body {
-  font-family: system-ui, Arial, sans-serif;
-  margin: 0;
-  padding: 0;
-  background: linear-gradient(135deg, #4e54c8, #8f94fb);
-  color: #fff;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  min-height: 100vh;
-  text-align: center;
+:root{
+  --bg1:#0f1226; --bg2:#1b1f3b;
+  --primary:#8f94fb; --accent:#4e54c8;
+  --text:#ffffff; --muted:#cfd2ff;
+  --ok:#17c964; --warn:#f5a524; --bad:#f31260;
+  --shadow:0 10px 25px rgba(0,0,0,.25);
+  --radius:12px; --space:8px;
 }
 
-/* Headings */
-h1 {
-  font-size: 2.5rem;
-  margin-bottom: 20px;
+/* Layout */
+html,body{height:100%}
+body{
+  margin:0; font-family:system-ui,Segoe UI,Roboto,Arial;
+  color:var(--text);
+  background: radial-gradient(1000px 600px at 20% 0%, var(--bg2), transparent),
+              linear-gradient(135deg, var(--bg1), var(--bg2));
+  display:flex; flex-direction:column; min-height:100vh;
 }
 
-/* Buttons / links */
-.link-btn {
-  display: inline-block;
-  padding: 12px 24px;
-  margin: 10px;
-  background: rgba(255,255,255,0.1);
-  border: 2px solid white;
-  border-radius: 8px;
-  color: white;
-  font-size: 1.1rem;
-  text-decoration: none;
-  transition: all 0.3s ease;
+/* Header / Footer */
+.header, .footer{
+  width:100%; padding:12px 16px;
+  background:rgba(255,255,255,.04); backdrop-filter: blur(6px);
+  display:flex; align-items:center; justify-content:space-between;
+  border-bottom:1px solid rgba(255,255,255,.08);
+}
+.footer{
+  position:sticky; bottom:0; margin-top:auto;
+  border-top:1px solid rgba(255,255,255,.08); border-bottom:none;
+}
+.brand{font-weight:700; letter-spacing:.3px}
+.nav a, .footer a{
+  color:var(--muted); text-decoration:none; margin-left:12px;
+}
+.nav a:hover, .footer a:hover{ color:#fff; }
+
+/* Container */
+.main{ width:100%; max-width:1000px; margin:24px auto; padding:0 16px; }
+
+/* Buttons */
+.btn{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:10px 16px; border:none; border-radius:var(--radius);
+  color:#fff; background:linear-gradient(135deg, var(--accent), var(--primary));
+  cursor:pointer; box-shadow:var(--shadow); transition: transform .1s ease;
+}
+.btn.ghost{
+  background:transparent; border:1px solid rgba(255,255,255,.2);
+  box-shadow:none;
+}
+.btn:active{ transform:translateY(1px); }
+.btn[disabled]{ opacity:.6; cursor:not-allowed; }
+
+/* Cards */
+.card{
+  background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.09);
+  border-radius:var(--radius); padding:16px; box-shadow:var(--shadow);
 }
 
-.link-btn:hover {
-  background: white;
-  color: #4e54c8;
+/* Video */
+video{
+  width:100%; max-width:900px; border-radius:var(--radius);
+  border:1px solid rgba(255,255,255,.12);
 }
 
-/* Video styling */
-video {
-  width: 640px;
-  max-width: 100%;
-  border: 1px solid #fff;
-  border-radius: 8px;
-  margin-bottom: 15px;
+/* Badges */
+.badges{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0 0; }
+.badge{ padding:4px 10px; border-radius:999px; font-size:.85rem; background:rgba(255,255,255,.08); }
+.badge.live{ background:#e11d48; }
+.badge.quality.ok{ background:rgba(23,201,100,.18); }
+.badge.quality.warn{ background:rgba(245,165,36,.18); }
+.badge.quality.bad{ background:rgba(243,18,96,.18); }
+
+/* Controls grid */
+.controls{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+@media (max-width:640px){
+  .controls{ flex-direction:column; }
 }
 
-/* Button elements (Broadcaster / Viewer controls) */
-button {
-  padding: 10px 18px;
-  margin: 8px;
-  font-size: 1rem;
-  border-radius: 8px;
-  border: none;
-  background-color: rgba(255,255,255,0.2);
-  color: #fff;
-  cursor: pointer;
-  transition: background-color 0.3s ease;
+/* Toasts */
+.toast{
+  position:fixed; left:50%; transform:translateX(-50%);
+  bottom:20px; background:#111827; color:#fff; padding:10px 14px;
+  border-radius:10px; box-shadow:var(--shadow); opacity:.95; z-index:9999;
+  border:1px solid rgba(255,255,255,.08);
 }
 
-button:hover {
-  background-color: white;
-  color: #4e54c8;
+/* Skeleton */
+.skel{
+  width:100%; max-width:900px; height:360px; border-radius:var(--radius);
+  background:linear-gradient(90deg, rgba(255,255,255,.06), rgba(255,255,255,.02), rgba(255,255,255,.06));
+  background-size:200% 100%; animation:shine 1.3s linear infinite;
+  border:1px solid rgba(255,255,255,.08);
 }
+@keyframes shine{ 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 
-/* Status text */
-#status {
-  margin-top: 8px;
-  font-style: italic;
-}
+/* Safe areas for iOS */
+body{ padding-bottom:env(safe-area-inset-bottom); }

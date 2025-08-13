@@ -5,36 +5,40 @@ const { Server } = require('socket.io');
 const mediasoup = require('mediasoup');
 
 const PORT = process.env.PORT || 3000;
-// Set this to your EC2 public/elastic IP. You can also pass ANNOUNCED_IP via env.
+// Set to your EC2 public/elastic IP (or pass ANNOUNCED_IP via env for PM2).
 const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '13.210.150.18';
 const WEBRTC_MIN_PORT = 40000;
 const WEBRTC_MAX_PORT = 49999;
 
-// Basic app
 const app = express();
-app.use(express.static('public')); // serve /public directory
+app.use(express.static('public')); // serve /public as web root
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// Mediasoup state
-let worker;
-let router;
+// ---- Mediasoup state ----
+let worker, router;
 let videoProducer = null;
 let audioProducer = null;
-const consumers = new Map(); // socket.id -> Consumer[]
 
+const consumers = new Map(); // socket.id -> Consumer[]
+const ROOM = 'main';
+
+// Add H264 for iOS/Safari (keep VP8 too)
 const mediaCodecs = [
   { kind: 'audio', mimeType: 'audio/opus', clockRate: 48000, channels: 2 },
-  { kind: 'video', mimeType: 'video/VP8', clockRate: 90000 }
+  { kind: 'video', mimeType: 'video/VP8', clockRate: 90000 },
+  {
+    kind: 'video',
+    mimeType: 'video/H264',
+    clockRate: 90000,
+    parameters: { 'level-asymmetry-allowed': 1, 'packetization-mode': 1, 'profile-level-id': '42e01f' }
+  }
 ];
 
 (async () => {
-  worker = await mediasoup.createWorker({
-    rtcMinPort: WEBRTC_MIN_PORT,
-    rtcMaxPort: WEBRTC_MAX_PORT
-  });
+  worker = await mediasoup.createWorker({ rtcMinPort: WEBRTC_MIN_PORT, rtcMaxPort: WEBRTC_MAX_PORT });
   worker.on('died', () => {
-    console.error('mediasoup worker died, exiting in 2s...'); 
+    console.error('mediasoup worker died, exiting in 2s...');
     setTimeout(() => process.exit(1), 2000);
   });
 
@@ -56,14 +60,29 @@ async function createWebRtcTransport() {
   return transport;
 }
 
+function broadcastViewerCount() {
+  const count = io.sockets.adapter.rooms.get(ROOM)?.size || 0;
+  io.to(ROOM).emit('viewerCount', { count });
+  // Also tell everyone (so broadcaster can see it)
+  io.emit('viewerCount', { count });
+}
+
 io.on('connection', (socket) => {
   console.log('client connected', socket.id);
 
-  socket.on('getRtpCapabilities', (cb) => {
-    cb(router.rtpCapabilities);
+  // --- Rooms / viewer count ---
+  socket.on('join', () => {
+    socket.join(ROOM);
+    broadcastViewerCount();
+  });
+  socket.on('leave', () => {
+    socket.leave(ROOM);
+    broadcastViewerCount();
   });
 
-  // Broadcaster: create send transport
+  socket.on('getRtpCapabilities', (cb) => cb(router.rtpCapabilities));
+
+  // --- Broadcaster: Send transport ---
   socket.on('createSendTransport', async (cb) => {
     try {
       const transport = await createWebRtcTransport();
@@ -81,13 +100,8 @@ io.on('connection', (socket) => {
   });
 
   socket.on('connectSendTransport', async ({ dtlsParameters }, cb) => {
-    try {
-      await socket.data.sendTransport.connect({ dtlsParameters });
-      cb('ok');
-    } catch (err) {
-      console.error('connectSendTransport error', err);
-      cb({ error: err.message });
-    }
+    try { await socket.data.sendTransport.connect({ dtlsParameters }); cb('ok'); }
+    catch (err) { console.error('connectSendTransport error', err); cb({ error: err.message }); }
   });
 
   socket.on('produce', async ({ kind, rtpParameters }, cb) => {
@@ -96,20 +110,17 @@ io.on('connection', (socket) => {
       const producer = await socket.data.sendTransport.produce({ kind, rtpParameters });
 
       if (kind === 'video') {
-        if (videoProducer) {
-          try { await videoProducer.close(); } catch {}
-        }
+        try { await videoProducer?.close(); } catch {}
         videoProducer = producer;
+        io.to(ROOM).emit('newProducer', { kind: 'video' }); // notify viewers to re-subscribe
       } else if (kind === 'audio') {
-        if (audioProducer) {
-          try { await audioProducer.close(); } catch {}
-        }
+        try { await audioProducer?.close(); } catch {}
         audioProducer = producer;
+        io.to(ROOM).emit('newProducer', { kind: 'audio' });
       }
 
       producer.on('transportclose', () => console.log(`${kind} producer transport closed`));
       producer.on('close', () => console.log(`${kind} producer closed`));
-
       cb({ id: producer.id });
     } catch (err) {
       console.error('produce error', err);
@@ -117,7 +128,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Viewer: create receive transport
+  // --- Viewer: Recv transport ---
   socket.on('createRecvTransport', async (cb) => {
     try {
       const transport = await createWebRtcTransport();
@@ -135,13 +146,8 @@ io.on('connection', (socket) => {
   });
 
   socket.on('connectRecvTransport', async ({ dtlsParameters }, cb) => {
-    try {
-      await socket.data.recvTransport.connect({ dtlsParameters });
-      cb('ok');
-    } catch (err) {
-      console.error('connectRecvTransport error', err);
-      cb({ error: err.message });
-    }
+    try { await socket.data.recvTransport.connect({ dtlsParameters }); cb('ok'); }
+    catch (err) { console.error('connectRecvTransport error', err); cb({ error: err.message }); }
   });
 
   socket.on('consume', async ({ rtpCapabilities, kind }, cb) => {
@@ -186,11 +192,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log('client disconnected', socket.id);
+    try { socket.leave(ROOM); } catch {}
+    broadcastViewerCount();
     try { socket.data.sendTransport?.close(); } catch {}
     try { socket.data.recvTransport?.close(); } catch {}
     const list = consumers.get(socket.id) || [];
-    list.forEach(c => { try { c.close(); } catch {} });
+    for (const c of list) { try { c.close(); } catch {} }
     consumers.delete(socket.id);
+    console.log('client disconnected', socket.id);
   });
 });
