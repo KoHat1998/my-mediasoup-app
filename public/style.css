@@ -1,0 +1,72 @@
+/* General layout */
+body {
+  font-family: system-ui, Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: linear-gradient(135deg, #4e54c8, #8f94fb);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  text-align: center;
+}
+
+/* Headings */
+h1 {
+  font-size: 2.5rem;
+  margin-bottom: 20px;
+}
+
+/* Buttons / links */
+.link-btn {
+  display: inline-block;
+  padding: 12px 24px;
+  margin: 10px;
+  background: rgba(255,255,255,0.1);
+  border: 2px solid white;
+  border-radius: 8px;
+  color: white;
+  font-size: 1.1rem;
+  text-decoration: none;
+  transition: all 0.3s ease;
+}
+
+.link-btn:hover {
+  background: white;
+  color: #4e54c8;
+}
+
+/* Video styling */
+video {
+  width: 640px;
+  max-width: 100%;
+  border: 1px solid #fff;
+  border-radius: 8px;
+  margin-bottom: 15px;
+}
+
+/* Button elements (Broadcaster / Viewer controls) */
+button {
+  padding: 10px 18px;
+  margin: 8px;
+  font-size: 1rem;
+  border-radius: 8px;
+  border: none;
+  background-color: rgba(255,255,255,0.2);
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+button:hover {
+  background-color: white;
+  color: #4e54c8;
+}
+
+/* Status text */
+#status {
+  margin-top: 8px;
+  font-style: italic;
+}
