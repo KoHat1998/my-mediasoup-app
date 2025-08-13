@@ -10,19 +10,20 @@ let videoConsumer = null, audioConsumer = null;
 
 let statsTimer = null;
 let lastBytes = 0, lastTs = 0;
+let starting = false;
 
 function skeleton(show){
   el('skel').style.display = show ? 'block' : 'none';
   el('remote').style.display = show ? 'none' : 'block';
 }
 
-function setQualityBadge(kbps, plr){ // plr: packet loss ratio %
+function setQualityBadge(kbps, plr){
   const q = el('quality');
-  let cls = 'badge quality ';
+  let cls = 'badge ';
   let txt = `~${Math.round(kbps)} kbps`;
   if (plr >= 5 || kbps < 200) { cls += 'bad'; txt += ' • Poor'; }
   else if (plr >= 2 || kbps < 600) { cls += 'warn'; txt += ' • Fair'; }
-  else { cls += 'ok'; txt += ' • Good'; }
+  else { cls += 'live'; txt += ' • Good'; }
   q.className = cls; q.textContent = txt;
 }
 
@@ -42,7 +43,9 @@ async function createRecvTransport() {
     dtlsParameters: params.dtlsParameters
   });
   recvTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
-    socket.emit('connectRecvTransport', { dtlsParameters }, (r) => r === 'ok' ? callback() : errback(new Error('connect failed')));
+    socket.emit('connectRecvTransport', { dtlsParameters }, (r) =>
+      r === 'ok' ? callback() : errback(new Error('connect failed'))
+    );
   });
 }
 
@@ -67,13 +70,9 @@ async function consumeKind(kind) {
   attachTrack(kind, consumer.track);
   await new Promise(res => socket.emit('resume', { consumerId: consumer.id }, res));
 
-  consumer.on('producerclose', async () => { // producer replaced on host side
-    try { await reconsume(kind); } catch(e) { console.error(e); }
-  });
+  consumer.on('producerclose', async () => { try { await reconsume(kind); } catch(e) { console.error(e); } });
 
   if (kind === 'video') {
-    // Set resolution badge
-    const s = el('remote').getVideoPlaybackQuality?.();
     el('res').textContent = '720p';
   }
 
@@ -112,10 +111,12 @@ function startStats(){
   }, 3000);
 }
 
-async function watch() {
+async function startWatching() {
+  if (starting) return;
+  starting = true;
   try {
     el('status').textContent = 'Connecting…'; skeleton(true);
-    socket.emit('join'); // join room for viewer count
+    socket.emit('join'); // for viewer count + liveStatus
     await loadDevice();
     await createRecvTransport();
     videoConsumer = await consumeKind('video');
@@ -125,17 +126,50 @@ async function watch() {
       el('live').textContent = 'LIVE';
       skeleton(false);
       startStats();
+      el('status').textContent = '📺 Watching';
     } else {
       el('live').textContent = 'Waiting for broadcaster…';
+      el('status').textContent = 'Waiting…';
+      starting = false; // allow retry when host goes live
     }
-    el('status').textContent = '📺 Watching';
   } catch (e) {
     console.error(e);
     el('status').textContent = e.message || 'Error starting viewer';
+    starting = false;
   }
 }
 
-// Faster update when server announces a new producer
+// Click Watch: check live first.
+// If not live, show waiting and auto-start when server pushes liveStatus/newProducer.
+el('watch').onclick = async () => {
+  try {
+    const live = await new Promise(res => socket.emit('isLive', res));
+    if (live?.video) {
+      await startWatching();
+    } else {
+      el('live').textContent = 'Waiting for broadcaster…';
+      el('status').textContent = 'You’ll connect automatically when the host goes live.';
+      socket.emit('join');
+      const tryStart = async () => {
+        const again = await new Promise(res => socket.emit('isLive', res));
+        if (again?.video) {
+          socket.off('liveStatus', onLiveStatus);
+          socket.off('newProducer', onNewProducer);
+          await startWatching();
+        }
+      };
+      var onLiveStatus = ({ video }) => { if (video) tryStart(); };
+      var onNewProducer = ({ kind }) => { if (kind === 'video') tryStart(); };
+      socket.on('liveStatus', onLiveStatus);
+      socket.on('newProducer', onNewProducer);
+    }
+  } catch (e) {
+    console.error(e);
+    el('status').textContent = 'Could not check live status';
+  }
+};
+
+// Faster update when already watching
 socket.on('newProducer', async ({ kind }) => {
   if (!device || !recvTransport) return;
   try { await reconsume(kind); } catch(e){ console.error(e); }
@@ -146,16 +180,3 @@ socket.on('viewerCount', ({ count }) => { el('vc').textContent = `👀 ${count}`
 socket.on('connect', () => toast('Connected'));
 socket.io.on('reconnect_attempt', () => toast('Reconnecting…'));
 socket.on('disconnect', () => toast('Disconnected'));
-
-el('watch').onclick = watch;
-
-el('fs').onclick = async () => {
-  const v = el('remote');
-  if (!document.fullscreenElement) await v.requestFullscreen().catch(()=>{});
-  else await document.exitFullscreen().catch(()=>{});
-};
-el('pip').onclick = async () => {
-  const v = el('remote');
-  if (document.pictureInPictureElement) await document.exitPictureInPicture().catch(()=>{});
-  else if (document.pictureInPictureEnabled) await v.requestPictureInPicture().catch(()=>{});
-};

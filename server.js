@@ -5,13 +5,13 @@ const { Server } = require('socket.io');
 const mediasoup = require('mediasoup');
 
 const PORT = process.env.PORT || 3000;
-// Set to your EC2 public/elastic IP (or pass ANNOUNCED_IP via env for PM2).
-const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '13.210.150.18';
+// IMPORTANT: set your EC2 public IP here or via env ANNOUNCED_IP
+const ANNOUNCED_IP = process.env.ANNOUNCED_IP || 'YOUR.EC2.PUBLIC.IP';
 const WEBRTC_MIN_PORT = 40000;
 const WEBRTC_MAX_PORT = 49999;
 
 const app = express();
-app.use(express.static('public')); // serve /public as web root
+app.use(express.static('public'));
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
@@ -23,23 +23,17 @@ let audioProducer = null;
 const consumers = new Map(); // socket.id -> Consumer[]
 const ROOM = 'main';
 
-// Add H264 for iOS/Safari (keep VP8 too)
-// server.js
+// Add H.264 for iOS/Safari (keep VP8 too) — H264 first to prefer it.
 const mediaCodecs = [
   { kind: 'audio', mimeType: 'audio/opus', clockRate: 48000, channels: 2 },
   {
     kind: 'video',
     mimeType: 'video/H264',
     clockRate: 90000,
-    parameters: {
-      'level-asymmetry-allowed': 1,
-      'packetization-mode': 1,
-      'profile-level-id': '42e01f' // Baseline; widely compatible on iOS
-    }
+    parameters: { 'level-asymmetry-allowed': 1, 'packetization-mode': 1, 'profile-level-id': '42e01f' }
   },
   { kind: 'video', mimeType: 'video/VP8', clockRate: 90000 }
 ];
-;
 
 (async () => {
   worker = await mediasoup.createWorker({ rtcMinPort: WEBRTC_MIN_PORT, rtcMaxPort: WEBRTC_MAX_PORT });
@@ -69,24 +63,25 @@ async function createWebRtcTransport() {
 function broadcastViewerCount() {
   const count = io.sockets.adapter.rooms.get(ROOM)?.size || 0;
   io.to(ROOM).emit('viewerCount', { count });
-  // Also tell everyone (so broadcaster can see it)
-  io.emit('viewerCount', { count });
+  io.emit('viewerCount', { count }); // also to broadcaster
+}
+
+function pushLiveStatus() {
+  io.to(ROOM).emit('liveStatus', { video: !!videoProducer, audio: !!audioProducer });
 }
 
 io.on('connection', (socket) => {
   console.log('client connected', socket.id);
 
-  // --- Rooms / viewer count ---
-  socket.on('join', () => {
-    socket.join(ROOM);
-    broadcastViewerCount();
-  });
-  socket.on('leave', () => {
-    socket.leave(ROOM);
-    broadcastViewerCount();
-  });
+  // Join/leave main room for viewer count
+  socket.on('join', () => { socket.join(ROOM); broadcastViewerCount(); });
+  socket.on('leave', () => { socket.leave(ROOM); broadcastViewerCount(); });
 
+  // Let clients query RTP caps
   socket.on('getRtpCapabilities', (cb) => cb(router.rtpCapabilities));
+
+  // ✅ Viewer asks "is host live?"
+  socket.on('isLive', (cb) => cb({ video: !!videoProducer, audio: !!audioProducer }));
 
   // --- Broadcaster: Send transport ---
   socket.on('createSendTransport', async (cb) => {
@@ -118,15 +113,24 @@ io.on('connection', (socket) => {
       if (kind === 'video') {
         try { await videoProducer?.close(); } catch {}
         videoProducer = producer;
-        io.to(ROOM).emit('newProducer', { kind: 'video' }); // notify viewers to re-subscribe
+        io.to(ROOM).emit('newProducer', { kind: 'video' });
       } else if (kind === 'audio') {
         try { await audioProducer?.close(); } catch {}
         audioProducer = producer;
         io.to(ROOM).emit('newProducer', { kind: 'audio' });
       }
 
+      // ✅ push live status whenever producer changes
+      pushLiveStatus();
+
       producer.on('transportclose', () => console.log(`${kind} producer transport closed`));
-      producer.on('close', () => console.log(`${kind} producer closed`));
+      producer.on('close', () => {
+        console.log(`${kind} producer closed`);
+        if (kind === 'video' && videoProducer === producer) videoProducer = null;
+        if (kind === 'audio' && audioProducer === producer) audioProducer = null;
+        pushLiveStatus(); // update viewers if host stops
+      });
+
       cb({ id: producer.id });
     } catch (err) {
       console.error('produce error', err);
