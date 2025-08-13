@@ -1,91 +1,113 @@
 :root{
+  /* fixed sizes for always-visible header/footer */
+  --header-h: 64px;
+  --footer-h: 56px;
+
+  /* theme */
   --bg1:#0f1226; --bg2:#1b1f3b;
   --primary:#8f94fb; --accent:#4e54c8;
-  --text:#ffffff; --muted:#cfd2ff;
-  --ok:#17c964; --warn:#f5a524; --bad:#f31260;
-  --shadow:0 10px 25px rgba(0,0,0,.25);
-  --radius:12px; --space:8px;
+  --text:#fff; --muted:#cfd2ff;
+  --radius:12px; --shadow:0 10px 25px rgba(0,0,0,.25);
 }
 
-/* Layout */
-html,body{height:100%}
+/* Base layout */
+html, body { height: 100%; }
 body{
-  margin:0; font-family:system-ui,Segoe UI,Roboto,Arial;
+  margin:0;
   color:var(--text);
+  font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif;
   background: radial-gradient(1000px 600px at 20% 0%, var(--bg2), transparent),
               linear-gradient(135deg, var(--bg1), var(--bg2));
-  display:flex; flex-direction:column; min-height:100vh;
+
+  /* keep header/footer visible and content not hidden under them */
+  padding-top: calc(var(--header-h) + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(var(--footer-h) + env(safe-area-inset-bottom, 0px));
 }
 
-/* Header / Footer */
+/* Fixed header & footer */
 .header, .footer{
-  width:100%; padding:12px 16px;
-  background:rgba(255,255,255,.04); backdrop-filter: blur(6px);
+  position: fixed; left: 0; right: 0; z-index: 1000;
+  background: rgba(255,255,255,.06); backdrop-filter: blur(6px);
   display:flex; align-items:center; justify-content:space-between;
-  border-bottom:1px solid rgba(255,255,255,.08);
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
 }
+.header{ top: 0; height: var(--header-h); }
 .footer{
-  position:sticky; bottom:0; margin-top:auto;
-  border-top:1px solid rgba(255,255,255,.08); border-bottom:none;
+  bottom: 0; height: var(--footer-h);
+  border-top: 1px solid rgba(255,255,255,.08);
+  border-bottom: none;
 }
-.brand{font-weight:700; letter-spacing:.3px}
-.nav a, .footer a{
-  color:var(--muted); text-decoration:none; margin-left:12px;
-}
-.nav a:hover, .footer a:hover{ color:#fff; }
 
-/* Container */
-.main{ width:100%; max-width:1000px; margin:24px auto; padding:0 16px; }
+/* Header content */
+.brand{
+  font-weight: 800; letter-spacing: .3px; text-decoration: none; color: var(--text);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.nav a, .footer a{
+  color: var(--muted); text-decoration: none; margin-left: 12px;
+}
+.nav a:hover, .footer a:hover{ color: #fff; }
+
+/* Main container lives between fixed header & footer */
+.main{
+  width: 100%; max-width: 1000px; margin: 0 auto; padding: 16px;
+  min-height: calc(100vh - var(--header-h) - var(--footer-h));
+  display: flex; flex-direction: column; justify-content: center;
+}
+
+/* Card & video */
+.card{
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+video{
+  width: 100%; max-width: 900px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255,255,255,.12);
+}
 
 /* Buttons */
 .btn{
-  display:inline-flex; align-items:center; gap:8px;
-  padding:10px 16px; border:none; border-radius:var(--radius);
-  color:#fff; background:linear-gradient(135deg, var(--accent), var(--primary));
-  cursor:pointer; box-shadow:var(--shadow); transition: transform .1s ease;
+  display: inline-flex; align-items:center; justify-content:center; gap:10px;
+  border: none; border-radius: var(--radius); cursor: pointer;
+  color:#fff; background: linear-gradient(135deg, var(--accent), var(--primary));
+  box-shadow: var(--shadow); transition: transform .08s ease, opacity .2s ease;
 }
-.btn.ghost{
-  background:transparent; border:1px solid rgba(255,255,255,.2);
-  box-shadow:none;
-}
-.btn:active{ transform:translateY(1px); }
+.btn:active{ transform: translateY(1px); }
 .btn[disabled]{ opacity:.6; cursor:not-allowed; }
 
-/* Cards */
-.card{
-  background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.09);
-  border-radius:var(--radius); padding:16px; box-shadow:var(--shadow);
+/* BIG call-to-action buttons */
+.btn.big{ padding: 16px 28px; font-size: 1.15rem; }
+
+/* Secondary/ghost button variant (outline) */
+.btn.ghost{
+  background: transparent;
+  border: 1px solid rgba(255,255,255,.25);
+  box-shadow: none;
 }
 
-/* Video */
-video{
-  width:100%; max-width:900px; border-radius:var(--radius);
-  border:1px solid rgba(255,255,255,.12);
-}
+/* Controls rows */
+.controls{ display:flex; flex-wrap: wrap; gap: 12px; }
 
 /* Badges */
 .badges{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0 0; }
 .badge{ padding:4px 10px; border-radius:999px; font-size:.85rem; background:rgba(255,255,255,.08); }
 .badge.live{ background:#e11d48; }
-.badge.quality.ok{ background:rgba(23,201,100,.18); }
-.badge.quality.warn{ background:rgba(245,165,36,.18); }
-.badge.quality.bad{ background:rgba(243,18,96,.18); }
 
-/* Controls grid */
-.controls{ display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
-@media (max-width:640px){
-  .controls{ flex-direction:column; }
-}
-
-/* Toasts */
+/* Toast */
 .toast{
   position:fixed; left:50%; transform:translateX(-50%);
-  bottom:20px; background:#111827; color:#fff; padding:10px 14px;
+  bottom:calc(var(--footer-h) + 12px);
+  background:#111827; color:#fff; padding:10px 14px;
   border-radius:10px; box-shadow:var(--shadow); opacity:.95; z-index:9999;
-  border:1px solid rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.08); display:none;
 }
 
-/* Skeleton */
+/* Skeleton block for loading */
 .skel{
   width:100%; max-width:900px; height:360px; border-radius:var(--radius);
   background:linear-gradient(90deg, rgba(255,255,255,.06), rgba(255,255,255,.02), rgba(255,255,255,.06));
@@ -94,5 +116,14 @@ video{
 }
 @keyframes shine{ 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 
-/* Safe areas for iOS */
-body{ padding-bottom:env(safe-area-inset-bottom); }
+/* Responsive */
+@media (max-width: 640px){
+  :root{ --header-h: 56px; --footer-h: 52px; }
+  .controls{ flex-direction: column; }
+  .btn.big{ width: 100%; padding: 18px; font-size: 1.1rem; }
+  .nav{ display:none; } /* keep header tidy on very small screens */
+}
+
+/* Respect iOS safe areas for header/footer edges */
+.header{ padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }
+.footer{ padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }

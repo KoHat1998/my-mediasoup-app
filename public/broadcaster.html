@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="header">
-    <div class="brand">🎥 KoHat Live</div>
+    <a href="/" class="brand">🎥 KoHat Live</a>
     <nav class="nav">
       <a href="/">Home</a>
       <a href="/broadcaster.html">Broadcast</a>
@@ -19,6 +19,7 @@
   <main class="main">
     <section class="card">
       <h2>Broadcaster</h2>
+
       <div class="badges">
         <span id="liveBadge" class="badge">OFFLINE</span>
         <span id="uptime" class="badge">00:00:00</span>
@@ -28,10 +29,10 @@
       <div id="skel" class="skel" style="margin:12px 0;"></div>
       <video id="local" autoplay muted playsinline style="display:none"></video>
 
-      <div class="controls">
-        <button id="go" class="btn">Go Live (Camera)</button>
-        <button id="share" class="btn">Share Screen</button>
-        <button id="stop" class="btn ghost">Stop</button>
+      <div class="controls" style="margin-top:12px">
+        <button id="go" class="btn big">Go Live (Camera)</button>
+        <button id="share" class="btn big">Share Screen</button>
+        <button id="stop" class="btn big ghost">Stop</button>
         <button id="toggleMic" class="btn ghost">Mute Mic</button>
         <button id="toggleCam" class="btn ghost">Disable Cam</button>
         <button id="end" class="btn ghost">End Stream</button>
@@ -50,9 +51,10 @@
     </nav>
   </footer>
 
-  <div id="toast" class="toast" style="display:none"></div>
+  <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
+  <!-- keep using your existing broadcaster.js in /public -->
   <script type="module" src="/broadcaster.js"></script>
 </body>
 </html>
