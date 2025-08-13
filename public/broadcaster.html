@@ -7,14 +7,16 @@
   <style>
     body { font-family: system-ui, Arial, sans-serif; max-width: 960px; margin: 20px auto; }
     video { width: 640px; max-width: 100%; border: 1px solid #444; border-radius: 8px; }
-    button { padding: 8px 14px; margin-top: 10px; }
+    button { padding: 8px 14px; margin-top: 10px; margin-right: 8px;}
     #status { margin-top: 8px; }
   </style>
 </head>
 <body>
   <h1>Broadcaster</h1>
   <video id="local" autoplay muted playsinline></video><br />
-  <button id="go">Go Live</button>
+  <button id="go">Go Live (Camera)</button>
+  <button id="share">Share Screen</button>
+  <button id="stop">Stop</button>
   <p id="status"></p>
 
   <script src="/socket.io/socket.io.js"></script>
