@@ -7,32 +7,22 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <!-- Fixed header (brand is a link to home) -->
+  <!-- Fixed header: brand -> home, buttons moved into header -->
   <header class="header">
     <a href="/" class="brand">🎥 KoHat Live</a>
-    <nav class="nav">
-      <a href="/">Home</a>
-      <a href="/broadcaster.html">Broadcast</a>
-      <a href="/viewer.html">Watch</a>
-    </nav>
+    <div class="actions">
+      <a class="btn big" href="/broadcaster.html">Start Broadcasting</a>
+      <a class="btn big ghost" href="/viewer.html">Watch Live</a>
+    </div>
   </header>
 
-  <!-- Content sits between header & footer -->
+  <!-- Main hero content (no Broadcast/Watch buttons here anymore) -->
   <main class="main">
-    <section class="card" style="text-align:center">
-      <h1>Go live in seconds.</h1>
-      <p>One host, unlimited viewers. Share your camera or your screen.</p>
-
-      <div class="controls" style="margin-top:12px; justify-content:center">
-        <a class="btn big" href="/broadcaster.html">Start Broadcasting</a>
-        <a class="btn big ghost" href="/viewer.html">Watch Live</a>
-      </div>
-
-      <div class="badges" style="margin-top:12px; justify-content:center">
-        <span class="badge">Secure (HTTPS)</span>
-        <span class="badge">WebRTC • Mediasoup</span>
-        <span class="badge">Mobile‑friendly</span>
-      </div>
+    <section class="card">
+      <div class="logo">KL</div>
+      <h1 style="margin:8px 0 6px">Go live in seconds</h1>
+      <p style="opacity:.9; margin:0">A clean one‑host live room for sharing your camera or your screen.</p>
+      <p style="opacity:.75; margin:8px 0 0">Fast. Simple. Works on desktop and mobile.</p>
     </section>
   </main>
 

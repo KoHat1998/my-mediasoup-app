@@ -9,11 +9,10 @@
 <body>
   <header class="header">
     <a href="/" class="brand">🎥 KoHat Live</a>
-    <nav class="nav">
-      <a href="/">Home</a>
-      <a href="/broadcaster.html">Broadcast</a>
-      <a href="/viewer.html">Watch</a>
-    </nav>
+    <div class="actions">
+      <a class="btn big" href="/broadcaster.html">Start Broadcasting</a>
+      <a class="btn big ghost" href="/viewer.html">Watch Live</a>
+    </div>
   </header>
 
   <main class="main">
@@ -30,13 +29,13 @@
       <div id="skel" class="skel" style="margin:12px 0;"></div>
       <video id="remote" autoplay playsinline controls style="display:none"></video>
 
-      <div class="controls" style="margin-top:12px">
+      <div class="controls" style="margin-top:12px; justify-content:center">
         <button id="watch" class="btn big">Watch</button>
         <button id="pip" class="btn big ghost">PiP</button>
         <button id="fs" class="btn big ghost">Fullscreen</button>
       </div>
 
-      <p id="status" style="margin-top:8px; opacity:.85"></p>
+      <p id="status" style="margin-top:8px; opacity:.85; text-align:center"></p>
     </section>
   </main>
 
@@ -52,7 +51,6 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <!-- keep using your existing viewer.js in /public -->
   <script type="module" src="/viewer.js"></script>
 </body>
 </html>

@@ -1,6 +1,6 @@
 :root{
-  /* fixed sizes for always-visible header/footer */
-  --header-h: 64px;
+  /* fixed sizes so header/footer are always fully visible */
+  --header-h: 84px;       /* desktop header */
   --footer-h: 56px;
 
   /* theme */
@@ -42,12 +42,9 @@ body{
 /* Header content */
 .brand{
   font-weight: 800; letter-spacing: .3px; text-decoration: none; color: var(--text);
-  display: inline-flex; align-items: center; gap: 8px;
+  display: inline-flex; align-items: center; gap: 8px; font-size: 1.1rem;
 }
-.nav a, .footer a{
-  color: var(--muted); text-decoration: none; margin-left: 12px;
-}
-.nav a:hover, .footer a:hover{ color: #fff; }
+.actions{ display:flex; gap: 10px; align-items:center; flex-wrap: nowrap; }
 
 /* Main container lives between fixed header & footer */
 .main{
@@ -61,8 +58,9 @@ body{
   background: rgba(255,255,255,.06);
   border: 1px solid rgba(255,255,255,.1);
   border-radius: var(--radius);
-  padding: 20px;
+  padding: 24px;
   box-shadow: var(--shadow);
+  text-align:center;
 }
 video{
   width: 100%; max-width: 900px;
@@ -76,24 +74,18 @@ video{
   border: none; border-radius: var(--radius); cursor: pointer;
   color:#fff; background: linear-gradient(135deg, var(--accent), var(--primary));
   box-shadow: var(--shadow); transition: transform .08s ease, opacity .2s ease;
+  padding: 12px 18px; font-size: 1rem;
 }
-.btn:active{ transform: translateY(1px); }
-.btn[disabled]{ opacity:.6; cursor:not-allowed; }
-
-/* BIG call-to-action buttons */
-.btn.big{ padding: 16px 28px; font-size: 1.15rem; }
-
-/* Secondary/ghost button variant (outline) */
+.btn.big{ padding: 16px 24px; font-size: 1.05rem; }
 .btn.ghost{
   background: transparent;
   border: 1px solid rgba(255,255,255,.25);
   box-shadow: none;
 }
+.btn:active{ transform: translateY(1px); }
+.btn[disabled]{ opacity:.6; cursor:not-allowed; }
 
-/* Controls rows */
-.controls{ display:flex; flex-wrap: wrap; gap: 12px; }
-
-/* Badges */
+/* Status badges (kept for broadcaster/viewer pages) */
 .badges{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0 0; }
 .badge{ padding:4px 10px; border-radius:999px; font-size:.85rem; background:rgba(255,255,255,.08); }
 .badge.live{ background:#e11d48; }
@@ -116,12 +108,27 @@ video{
 }
 @keyframes shine{ 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 
+/* Simple “logo” mark on the hero */
+.logo{
+  width:90px; height:90px; border-radius:22px;
+  background: conic-gradient(from 180deg, var(--accent), var(--primary));
+  display:inline-flex; align-items:center; justify-content:center;
+  margin: 0 auto 12px; box-shadow: var(--shadow);
+  border: 1px solid rgba(255,255,255,.18);
+  font-weight: 800; font-size: 1.4rem;
+}
+
 /* Responsive */
-@media (max-width: 640px){
-  :root{ --header-h: 56px; --footer-h: 52px; }
-  .controls{ flex-direction: column; }
-  .btn.big{ width: 100%; padding: 18px; font-size: 1.1rem; }
-  .nav{ display:none; } /* keep header tidy on very small screens */
+@media (max-width: 820px){
+  :root{ --header-h: 108px; } /* taller header to keep big buttons in view */
+  .header{ flex-direction: column; justify-content:center; gap:10px; padding-top:8px; padding-bottom:8px; }
+  .actions{ flex-wrap: wrap; justify-content:center; }
+  .btn.big{ padding: 16px 22px; font-size: 1.05rem; }
+}
+
+@media (max-width: 480px){
+  :root{ --header-h: 132px; } /* more height for stacked buttons */
+  .actions .btn{ width: 100%; }
 }
 
 /* Respect iOS safe areas for header/footer edges */

@@ -9,11 +9,10 @@
 <body>
   <header class="header">
     <a href="/" class="brand">🎥 KoHat Live</a>
-    <nav class="nav">
-      <a href="/">Home</a>
-      <a href="/broadcaster.html">Broadcast</a>
-      <a href="/viewer.html">Watch</a>
-    </nav>
+    <div class="actions">
+      <a class="btn big" href="/broadcaster.html">Start Broadcasting</a>
+      <a class="btn big ghost" href="/viewer.html">Watch Live</a>
+    </div>
   </header>
 
   <main class="main">
@@ -29,7 +28,7 @@
       <div id="skel" class="skel" style="margin:12px 0;"></div>
       <video id="local" autoplay muted playsinline style="display:none"></video>
 
-      <div class="controls" style="margin-top:12px">
+      <div class="controls" style="margin-top:12px; justify-content:center">
         <button id="go" class="btn big">Go Live (Camera)</button>
         <button id="share" class="btn big">Share Screen</button>
         <button id="stop" class="btn big ghost">Stop</button>
@@ -38,7 +37,7 @@
         <button id="end" class="btn ghost">End Stream</button>
       </div>
 
-      <p id="status" style="margin-top:8px; opacity:.85"></p>
+      <p id="status" style="margin-top:8px; opacity:.85; text-align:center"></p>
     </section>
   </main>
 
@@ -54,7 +53,6 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <!-- keep using your existing broadcaster.js in /public -->
   <script type="module" src="/broadcaster.js"></script>
 </body>
 </html>
