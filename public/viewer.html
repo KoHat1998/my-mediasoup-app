@@ -1,56 +1,29 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Watch • KoHat Live</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="/style.css" />
-</head>
-<body>
-  <header class="header">
-    <a href="/" class="brand">🎥 KoHat Live</a>
-    <div class="actions">
-      <a class="btn big" href="/broadcaster.html">Start Broadcasting</a>
-      <a class="btn big ghost" href="/viewer.html">Watch Live</a>
-    </div>
-  </header>
+<section class="card">
+  <h2>Choose a stream</h2>
 
-  <main class="main">
-    <section class="card">
-      <h2>Viewer</h2>
+  <div class="controls" style="margin:12px 0; justify-content:center; gap:12px; flex-wrap:wrap">
+    <a class="btn big" href="/viewer.html?ch=b1">Broadcaster 1</a>
+    <a class="btn big" href="/viewer.html?ch=b2">Broadcaster 2</a>
+  </div>
 
-      <div class="badges">
-        <span id="live" class="badge">Checking…</span>
-        <span id="res" class="badge">–</span>
-        <span id="quality" class="badge">–</span>
-        <span id="vc" class="badge">👀 0</span>
-      </div>
+  <hr style="border-color:rgba(255,255,255,.12); margin:16px 0">
 
-      <div id="skel" class="skel" style="margin:12px 0;"></div>
-      <video id="remote" autoplay playsinline controls style="display:none"></video>
+  <h3 style="margin:0 0 8px">Player</h3>
+  <div class="badges">
+    <span id="live" class="badge">Checking…</span>
+    <span id="res" class="badge">–</span>
+    <span id="quality" class="badge">–</span>
+    <span id="vc" class="badge">👀 0</span>
+  </div>
 
-      <div class="controls" style="margin-top:12px; justify-content:center">
-        <button id="watch" class="btn big">Watch</button>
-        <button id="pip" class="btn big ghost">PiP</button>
-        <button id="fs" class="btn big ghost">Fullscreen</button>
-      </div>
+  <div id="skel" class="skel" style="margin:12px 0;"></div>
+  <video id="remote" autoplay playsinline controls style="display:none"></video>
 
-      <p id="status" style="margin-top:8px; opacity:.85; text-align:center"></p>
-    </section>
-  </main>
+  <div class="controls" style="margin-top:12px; justify-content:center">
+    <button id="watch" class="btn big">Watch</button>
+    <button id="pip" class="btn big ghost">PiP</button>
+    <button id="fs" class="btn big ghost">Fullscreen</button>
+  </div>
 
-  <footer class="footer">
-    <small>© 2025 KoHat Live</small>
-    <nav>
-      <a href="#">Terms</a>
-      <a href="#">Privacy</a>
-      <a href="#">Contact</a>
-    </nav>
-  </footer>
-
-  <div id="toast" class="toast"></div>
-
-  <script src="/socket.io/socket.io.js"></script>
-  <script type="module" src="/viewer.js"></script>
-</body>
-</html>
+  <p id="status" style="margin-top:8px; opacity:.85; text-align:center"></p>
+</section>

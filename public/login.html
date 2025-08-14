@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Login • KoHat Live</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="header">
+    <a href="/" class="brand">🎥 KoHat Live</a>
+  </header>
+
+  <main class="main">
+    <section class="card">
+      <h2>Admin Login</h2>
+      <p style="opacity:.85">Sign in as <strong>Broadcaster 1</strong> or <strong>Broadcaster 2</strong>.</p>
+      <form method="post" action="/login" style="margin-top:12px; display:flex; flex-direction:column; gap:10px; align-items:center">
+        <input name="username" placeholder="b1 or b2" required style="padding:12px; border-radius:12px; border:1px solid rgba(255,255,255,.25); width:260px; background:rgba(0,0,0,.2); color:#fff">
+        <input name="password" type="password" placeholder="password" required style="padding:12px; border-radius:12px; border:1px solid rgba(255,255,255,.25); width:260px; background:rgba(0,0,0,.2); color:#fff">
+        <button class="btn big" type="submit">Login</button>
+      </form>
+      <p style="color:#fca5a5; margin-top:8px;">
+        <script>if (new URLSearchParams(location.search).get('err')) document.write('Invalid username or password');</script>
+      </p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <small>© 2025 KoHat Live</small>
+  </footer>
+</body>
+</html>
