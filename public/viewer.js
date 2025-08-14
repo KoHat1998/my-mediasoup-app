@@ -30,15 +30,6 @@ function setQualityBadge(kbps, plr){
 
 async function loadDevice(){ const caps = await new Promise(res => socket.emit('getRtpCapabilities', res)); const d = new mediasoupClient.Device(); await d.load({ routerRtpCapabilities: caps }); return d; }
 
-async function createRecvTransport() {
-  const params = await new Promise(res => socket.emit('createRecvTransport', { channelId }, res));
-  if (params?.error) throw new Error(params.error);
-  const t = new mediasoupClient.Transport('recv', params); // not public API; use helper:
-  // Use client helper instead:
-  const recv = new mediasoupClient.Device().createRecvTransport; // ignore; we’ll do standard way below
-}
-
-// Standard way:
 async function makeRecvTransport() {
   const params = await new Promise(res => socket.emit('createRecvTransport', { channelId }, res));
   if (params?.error) throw new Error(params.error);
@@ -94,14 +85,15 @@ function startStats(){
 }
 
 async function watch() {
-  if (!channelId) { el('status').textContent = 'Pick a channel first'; return; }
+  if (!channelId) { el('status').textContent = 'Pick a channel first (Broadcaster 1 or 2)'; return; }
   try {
     el('status').textContent = 'Connecting…'; skeleton(true);
     socket.emit('join', { channelId }, ()=>{});
-    device = new mediasoupClient.Device(); await device.load({ routerRtpCapabilities: await new Promise(res => socket.emit('getRtpCapabilities', res)) });
+    device = await loadDevice();
     recvTransport = await makeRecvTransport();
     videoConsumer = await consumeKind('video');
     audioConsumer = await consumeKind('audio');
+
     if (videoConsumer) { el('live').textContent = 'LIVE'; skeleton(false); startStats(); }
     else { el('live').textContent = 'Waiting for broadcaster…'; }
     el('status').textContent = '📺 Watching';
