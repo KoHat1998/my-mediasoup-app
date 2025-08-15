@@ -85,7 +85,7 @@ video{
 .btn:active{ transform: translateY(1px); }
 .btn[disabled]{ opacity:.6; cursor:not-allowed; }
 
-/* Status badges (kept for broadcaster/viewer pages) */
+/* Status badges */
 .badges{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0 0; }
 .badge{ padding:4px 10px; border-radius:999px; font-size:.85rem; background:rgba(255,255,255,.08); }
 .badge.live{ background:#e11d48; }
@@ -120,14 +120,13 @@ video{
 
 /* Responsive */
 @media (max-width: 820px){
-  :root{ --header-h: 108px; } /* taller header to keep big buttons in view */
+  :root{ --header-h: 108px; }
   .header{ flex-direction: column; justify-content:center; gap:10px; padding-top:8px; padding-bottom:8px; }
   .actions{ flex-wrap: wrap; justify-content:center; }
   .btn.big{ padding: 16px 22px; font-size: 1.05rem; }
 }
-
 @media (max-width: 480px){
-  :root{ --header-h: 132px; } /* more height for stacked buttons */
+  :root{ --header-h: 132px; }
   .actions .btn{ width: 100%; }
 }
 
@@ -135,15 +134,29 @@ video{
 .header{ padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }
 .footer{ padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }
 
-/* YouTube-like player overlay */
+/* ---------- YouTube-like player overlay (top-left badges + top-right controls) ---------- */
 .player { position: relative; display: inline-block; width: 100%; max-width: 900px; }
 .player video { display:block; width:100%; height:auto; border-radius: var(--radius); border:1px solid rgba(255,255,255,.12); background:#000; }
 
+/* base overlay hidden by default */
 .player .overlay {
   position:absolute; left:0; right:0; opacity:0; transition:opacity .2s ease;
   display:flex; align-items:center; padding:8px 10px;
 }
-.player .overlay.top-left { top:10px; left:10px; right:auto; gap:8px; opacity:1; pointer-events:none; }
+
+/* top-left badges are always visible & non-clickable */
+.player .overlay.top-left {
+  top:10px; left:10px; right:auto; gap:8px; opacity:1; pointer-events:none;
+}
+
+/* top-right controls (quality + fullscreen) are always visible and clickable */
+.player .overlay.top-right {
+  top:10px; right:10px; left:auto; gap:8px;
+  opacity: 1;            /* make it visible */
+  pointer-events: auto;  /* allow clicks */
+}
+
+/* (optional) bottom hover bar – keep if you ever reuse it */
 .player .overlay.bottom { bottom:0; left:0; right:0; padding:8px 12px; background:linear-gradient(transparent, rgba(0,0,0,.6)); }
 .player:hover .overlay.bottom { opacity:1; }
 
@@ -160,13 +173,13 @@ video{
 .icon{ width:22px; height:22px; fill:#fff; opacity:.95; }
 
 /* settings (quality) dropdown disguised as gear */
-.icon-wrap{ position:relative; display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:6px; }
+.icon-wrap{ position:relative; display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:6px; cursor:pointer; }
 .icon-wrap:hover{ background: rgba(255,255,255,.12); }
 .icon-wrap .icon{ pointer-events:none; }
 .ytselect{
   position:absolute; right:0; bottom:110%; /* open upward */
   appearance:none; background:#111827; color:#fff; border:1px solid rgba(255,255,255,.18);
-  border-radius:8px; padding:6px 8px; font-size:.9rem; display:none;
+  border-radius:8px; padding:6px 8px; font-size:.9rem; display:none; min-width: 120px;
 }
 .icon-wrap:focus-within .ytselect,
 .icon-wrap:active .ytselect{ display:block; }
@@ -175,30 +188,17 @@ video{
 /* keep badges compact */
 .badge{ font-size:.8rem; padding:3px 8px; }
 
-/* --- Additions to keep overlays in fullscreen and support a top-right slot --- */
-
-/* Top-right overlay slot (for gear/fullscreen etc.) */
-.player .overlay.top-right {
-  top: 10px;
-  right: 10px;
-  left: auto;
-  gap: 8px;
-}
-
-/* Keep overlays visible when the CONTAINER (.player) is fullscreen */
+/* --- Keep overlays visible in container fullscreen --- */
 .player:fullscreen,
 .player:-webkit-full-screen {
-  background: #000; /* nice letterbox background */
+  background: #000;
 }
-
-/* Make sure your overlays sit above the video in fullscreen */
 .player:fullscreen .overlay,
 .player:-webkit-full-screen .overlay {
-  opacity: 1;           /* always visible in FS */
+  opacity: 1;
   z-index: 10;
 }
-
-/* Optional: make the video nicely scale in true fullscreen */
+/* scale the video to fit fullscreen neatly */
 .player:fullscreen video,
 .player:-webkit-full-screen video {
   width: 100vw;
@@ -207,6 +207,5 @@ video{
   border: none;
   border-radius: 0;
 }
-
-/* Badges shouldn't block clicks on native controls */
+/* badges shouldn't block clicks on native controls */
 .player .overlay.top-left .badge { pointer-events: none; }
