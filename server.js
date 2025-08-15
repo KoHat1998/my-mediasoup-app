@@ -219,7 +219,7 @@ io.on('connection', (socket) => {
   socket.on('createRecvTransport', async ({ channelId } = {}, cb) => {
     try {
       const ch = getChannelIdFromPayload({ channelId });
-      if (!ch) return cb({ error: 'invalid channelId' });
+    if (!ch) return cb({ error: 'invalid channelId' });
       const transport = await createWebRtcTransport();
       socket.data[`recvTransport_${ch}`] = transport;
       cb({
@@ -258,7 +258,7 @@ io.on('connection', (socket) => {
       list.push(consumer);
       consumers.set(socket.id, list);
 
-      // Remember this viewer's video consumer so we can change its layer later
+      // *** NEW: remember this viewer's video consumer so we can change its layer later
       if (consumer.kind === 'video') {
         socket.data[`videoConsumer_${ch}`] = consumer;
       }
@@ -285,7 +285,7 @@ io.on('connection', (socket) => {
     cb('ok');
   });
 
-  // NEW: let viewer change preferred simulcast layer (for quality menu)
+  // *** NEW: let viewer change preferred simulcast layer (for quality menu)
   socket.on('setPreferredLayers', async ({ channelId, spatialLayer = 2, temporalLayer = null }, cb = () => {}) => {
     try {
       const ch = getChannelIdFromPayload({ channelId });
@@ -304,7 +304,7 @@ io.on('connection', (socket) => {
     for (const ch of CHANNEL_IDS) {
       try { socket.data[`sendTransport_${ch}`]?.close(); } catch {}
       try { socket.data[`recvTransport_${ch}`]?.close(); } catch {}
-      // update viewer counts for rooms this socket might have been in
+      // *** ensure viewer count updates if this socket was in any room
       broadcastViewerCount(ch);
     }
     const list = consumers.get(socket.id) || [];

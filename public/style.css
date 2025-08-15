@@ -174,3 +174,39 @@ video{
 
 /* keep badges compact */
 .badge{ font-size:.8rem; padding:3px 8px; }
+
+/* --- Additions to keep overlays in fullscreen and support a top-right slot --- */
+
+/* Top-right overlay slot (for gear/fullscreen etc.) */
+.player .overlay.top-right {
+  top: 10px;
+  right: 10px;
+  left: auto;
+  gap: 8px;
+}
+
+/* Keep overlays visible when the CONTAINER (.player) is fullscreen */
+.player:fullscreen,
+.player:-webkit-full-screen {
+  background: #000; /* nice letterbox background */
+}
+
+/* Make sure your overlays sit above the video in fullscreen */
+.player:fullscreen .overlay,
+.player:-webkit-full-screen .overlay {
+  opacity: 1;           /* always visible in FS */
+  z-index: 10;
+}
+
+/* Optional: make the video nicely scale in true fullscreen */
+.player:fullscreen video,
+.player:-webkit-full-screen video {
+  width: 100vw;
+  height: 100vh;
+  object-fit: contain;
+  border: none;
+  border-radius: 0;
+}
+
+/* Badges shouldn't block clicks on native controls */
+.player .overlay.top-left .badge { pointer-events: none; }

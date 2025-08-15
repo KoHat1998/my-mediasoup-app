@@ -10,14 +10,15 @@
   <header class="header">
     <a href="/" class="brand">🎥 KoHat Live</a>
     <div class="actions">
-      <a class="btn big" href="/broadcaster.html">Start Broadcasting</a>
+      <!-- send users to /login; server will redirect to the right channel after auth -->
+      <a class="btn big" href="/login">Start Broadcasting</a>
       <a class="btn big ghost" href="/viewer.html">Watch Live</a>
     </div>
   </header>
 
   <main class="main">
     <section class="card">
-      <h2>Broadcaster</h2>
+      <h2 style="margin-top:0">Broadcaster <small id="who" style="opacity:.85; font-weight:600"></small></h2>
 
       <div class="badges">
         <span id="liveBadge" class="badge">OFFLINE</span>
@@ -28,7 +29,7 @@
       <div id="skel" class="skel" style="margin:12px 0;"></div>
       <video id="local" autoplay muted playsinline style="display:none"></video>
 
-      <div class="controls" style="margin-top:12px; justify-content:center">
+      <div class="controls" style="margin-top:12px; justify-content:center; flex-wrap:wrap; gap:10px">
         <button id="go" class="btn big">Go Live (Camera)</button>
         <button id="share" class="btn big">Share Screen</button>
         <button id="stop" class="btn big ghost">Stop</button>
@@ -54,5 +55,14 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script type="module" src="/broadcaster.js"></script>
+
+  <!-- Tiny helper to show which channel this page controls -->
+  <script>
+    (function(){
+      const q = new URLSearchParams(location.search).get('ch');
+      const who = document.getElementById('who');
+      if (who) who.textContent = q === 'b1' ? '(Broadcaster 1)' : (q === 'b2' ? '(Broadcaster 2)' : '');
+    })();
+  </script>
 </body>
 </html>

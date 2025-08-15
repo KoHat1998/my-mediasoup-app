@@ -1,8 +1,10 @@
+// public/viewer.js
 import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
 const el = (id) => document.getElementById(id);
 const toast = (t) => { const x = el('toast'); if (!x) return; x.textContent = t; x.style.display='block'; setTimeout(()=>x.style.display='none', 1600); };
 
+// --- Channel from URL (?ch=b1|b2)
 function getChannelId() {
   const ch = new URLSearchParams(location.search).get('ch');
   return ['b1','b2'].includes(ch) ? ch : null;
@@ -16,13 +18,23 @@ const mediaStream = new MediaStream();
 let videoConsumer = null, audioConsumer = null;
 
 let statsTimer = null, lastBytes = 0, lastTs = 0;
+
+// optional: if you later add an external quality selector with id="qualitySel"
 const qualitySel = document.getElementById('qualitySel');
 let supportsQualityMenu = true;
 
-function skeleton(show){ el('skel').style.display = show ? 'block' : 'none'; el('remote').style.display = show ? 'none' : 'block'; }
+// skeleton / loading
+function skeleton(show){
+  const sk = el('skel'), v = el('remote');
+  if (sk) sk.style.display = show ? 'block' : 'none';
+  if (v)  v.style.display  = show ? 'none'  : 'block';
+}
 
+// quality badge (network)
 function setQualityBadge(kbps, plr){
-  const q = el('quality'); let cls = 'badge quality '; let txt = `~${Math.round(kbps)} kbps`;
+  const q = el('quality'); if (!q) return;
+  let cls = 'badge quality ';
+  let txt = `~${Math.round(kbps)} kbps`;
   if (plr >= 5 || kbps < 200) { cls += 'bad'; txt += ' • Poor'; }
   else if (plr >= 2 || kbps < 600) { cls += 'warn'; txt += ' • Fair'; }
   else { cls += 'ok'; txt += ' • Good'; }
@@ -32,6 +44,8 @@ function setQualityBadge(kbps, plr){
 async function loadDevice(){
   const caps = await new Promise(res => socket.emit('getRtpCapabilities', res));
   device = new mediasoupClient.Device(); await device.load({ routerRtpCapabilities: caps });
+
+  // if you decide to gate the external quality menu by codec support
   const hasVp8 = device.rtpCapabilities.codecs.some(c => /video\/VP8/i.test(c.mimeType));
   if (!hasVp8 && qualitySel) { supportsQualityMenu = false; qualitySel.disabled = true; qualitySel.title = 'Quality not available on this device'; }
 }
@@ -47,19 +61,24 @@ async function makeRecvTransport() {
 }
 
 function attachTrack(kind, track){
+  const v = el('remote');
   if (kind === 'video') { const old = mediaStream.getVideoTracks()[0]; if (old) mediaStream.removeTrack(old); mediaStream.addTrack(track); }
   else { const old = mediaStream.getAudioTracks()[0]; if (old) mediaStream.removeTrack(old); mediaStream.addTrack(track); }
-  if (!el('remote').srcObject) el('remote').srcObject = mediaStream;
+  if (v && !v.srcObject) v.srcObject = mediaStream;
 }
 
 async function consumeKind(kind) {
   const data = await new Promise(res => socket.emit('consume', { channelId, rtpCapabilities: device.rtpCapabilities, kind }, res));
-  if (data?.error) { if (kind === 'video') el('live').textContent = 'Waiting for broadcaster…'; return null; }
+  if (data?.error) { if (kind === 'video') { const live = el('live'); if (live) live.textContent = 'Waiting for broadcaster…'; } return null; }
   const consumer = await recvTransport.consume(data);
   attachTrack(kind, consumer.track);
   await new Promise(res => socket.emit('resume', { consumerId: consumer.id }, res));
+
   consumer.on('producerclose', async () => { try { await reconsume(kind); } catch(e){ console.error(e); } });
-  if (kind === 'video') el('res').textContent = '720p';
+
+  if (kind === 'video') {
+    const r = el('res'); if (r) r.textContent = '720p'; // static label; you can compute from stats if you want
+  }
   return consumer;
 }
 
@@ -91,18 +110,19 @@ function startStats(){
 }
 
 async function watch() {
-  if (!channelId) { el('status').textContent = 'Pick a channel above (Broadcaster 1 or 2)'; return; }
+  if (!channelId) { const s = el('status'); if (s) s.textContent = 'Pick a channel (?ch=b1 or ?ch=b2)'; return; }
   try {
-    el('status').textContent = 'Connecting…'; skeleton(true);
+    const s = el('status'); if (s) s.textContent = 'Connecting…'; skeleton(true);
     await new Promise(res => socket.emit('join', { channelId }, res));
     await loadDevice();
     recvTransport = await makeRecvTransport();
     videoConsumer = await consumeKind('video');
     audioConsumer = await consumeKind('audio');
-    if (videoConsumer) { el('live').textContent = 'LIVE'; skeleton(false); startStats(); }
-    else { el('live').textContent = 'Waiting for broadcaster…'; }
-    el('status').textContent = '📺 Watching';
-  } catch (e) { console.error(e); el('status').textContent = e.message || 'Error starting viewer'; }
+    const live = el('live');
+    if (videoConsumer) { if (live) live.textContent = 'LIVE'; skeleton(false); startStats(); }
+    else { if (live) live.textContent = 'Waiting for broadcaster…'; }
+    if (s) s.textContent = '📺 Watching';
+  } catch (e) { console.error(e); const s = el('status'); if (s) s.textContent = e.message || 'Error starting viewer'; }
 }
 
 // server notifications
@@ -111,12 +131,12 @@ socket.on('newProducer', async ({ channelId: cid, kind }) => {
   if (!device || !recvTransport) return;
   try { await reconsume(kind); } catch(e){ console.error(e); }
 });
-socket.on('viewerCount', ({ count }) => { el('vc').textContent = `👀 ${count}`; });
+socket.on('viewerCount', ({ count }) => { const v = el('vc'); if (v) v.textContent = `👀 ${count}`; });
 socket.on('connect', () => toast('Connected'));
 socket.io.on('reconnect_attempt', () => toast('Reconnecting…'));
 socket.on('disconnect', () => toast('Disconnected'));
 
-// quality menu → change simulcast layer
+// (optional) external quality menu outside the player
 if (qualitySel) {
   qualitySel.onchange = async () => {
     if (!supportsQualityMenu) return;
@@ -126,14 +146,32 @@ if (qualitySel) {
   };
 }
 
-// Fullscreen
-document.getElementById('fs').onclick = async () => {
-  const v = el('remote');
-  if (!document.fullscreenElement) await v.requestFullscreen().catch(()=>{});
-  else await document.exitFullscreen().catch(()=>{});
-};
+// ---- Fullscreen: request fullscreen on the CONTAINER so overlays can stay ----
+const fsBtn = document.getElementById('fs');
+if (fsBtn) {
+  fsBtn.onclick = async () => {
+    // prefer a wrapper with id="player" (position:relative; contains video + overlays)
+    const container = document.getElementById('player') || el('remote');
+    if (!document.fullscreenElement) await container.requestFullscreen().catch(()=>{});
+    else await document.exitFullscreen().catch(()=>{});
+  };
+}
+// Toggle a class on fullscreen to let CSS pin overlays correctly
+document.addEventListener('fullscreenchange', () => {
+  const container = document.getElementById('player');
+  if (container) container.classList.toggle('is-fs', !!document.fullscreenElement);
+});
 
 // ------ AUTO‑PLAY on page load if channelId exists ------
 document.addEventListener('DOMContentLoaded', () => {
   if (channelId) watch();
 });
+
+// (Optional) Expose a small API your friend’s app can call to change quality:
+window.kohatViewer = {
+  setQuality: async (level /* 'low' | 'med' | 'high' */) => {
+    const map = { low:0, med:1, high:2 };
+    if (!device || !recvTransport) return;
+    await new Promise(res => socket.emit('setPreferredLayers', { channelId, spatialLayer: map[level] ?? 2 }, res));
+  }
+};
