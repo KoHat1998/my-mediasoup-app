@@ -134,3 +134,12 @@ video{
 /* Respect iOS safe areas for header/footer edges */
 .header{ padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }
 .footer{ padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }
+
+.player { position: relative; display: inline-block; width: 100%; max-width: 900px; }
+.player video { display:block; width:100%; height:auto; border-radius: var(--radius); border:1px solid rgba(255,255,255,.12); }
+
+.player .overlay { position:absolute; left:0; right:0; opacity:0; transition:opacity .2s ease; display:flex; align-items:center; padding:8px 10px; }
+.player .overlay.top-left { top:10px; left:10px; right:auto; gap:8px; opacity:1; pointer-events:none; } /* badges always visible */
+.player .overlay.bottom { bottom:10px; left:10px; right:10px; justify-content:space-between; background:linear-gradient(transparent, rgba(0,0,0,.35)); border-radius:10px; }
+.player:hover .overlay.bottom { opacity:1; }
+.player .group { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }

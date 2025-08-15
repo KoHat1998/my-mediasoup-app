@@ -17,30 +17,44 @@
 
   <main class="main">
     <section class="card">
-      <h2>Choose a stream</h2>
+      <h2 style="margin-top:0">Viewer</h2>
 
-      <div class="controls" style="margin:12px 0; justify-content:center; gap:12px; flex-wrap:wrap">
-        <a class="btn big" href="/viewer.html?ch=b1">Broadcaster 1</a>
-        <a class="btn big" href="/viewer.html?ch=b2">Broadcaster 2</a>
+      <!-- channel picker -->
+      <div class="controls" style="justify-content:center; gap:12px; margin-bottom:10px; flex-wrap:wrap">
+        <a class="btn" href="/viewer.html?ch=b1">Broadcaster 1</a>
+        <a class="btn" href="/viewer.html?ch=b2">Broadcaster 2</a>
       </div>
 
-      <hr style="border-color:rgba(255,255,255,.12); margin:16px 0">
+      <!-- player with overlay -->
+      <div class="player" id="player">
+        <video id="remote" autoplay playsinline></video>
 
-      <h3 style="margin:0 0 8px">Player</h3>
-      <div class="badges">
-        <span id="live" class="badge">Checking…</span>
+        <div class="overlay top-left">
+          <span id="live" class="badge">Checking…</span>
+          <span id="vc" class="badge">👀 0</span>
+        </div>
+
+        <div class="overlay bottom">
+          <div class="group">
+            <button id="watch" class="btn">Watch</button>
+          </div>
+          <div class="group">
+            <select id="qualitySel" class="btn">
+              <option value="auto">Auto</option>
+              <option value="high">High</option>
+              <option value="med">Medium</option>
+              <option value="low">Low</option>
+            </select>
+            <button id="fs" class="btn ghost">Fullscreen</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="skel" class="skel" style="margin:12px auto 0;"></div>
+
+      <div class="badges" style="justify-content:center">
         <span id="res" class="badge">–</span>
         <span id="quality" class="badge">–</span>
-        <span id="vc" class="badge">👀 0</span>
-      </div>
-
-      <div id="skel" class="skel" style="margin:12px 0;"></div>
-      <video id="remote" autoplay playsinline controls style="display:none"></video>
-
-      <div class="controls" style="margin-top:12px; justify-content:center">
-        <button id="watch" class="btn big">Watch</button>
-        <button id="pip" class="btn big ghost">PiP</button>
-        <button id="fs" class="btn big ghost">Fullscreen</button>
       </div>
 
       <p id="status" style="margin-top:8px; opacity:.85; text-align:center"></p>

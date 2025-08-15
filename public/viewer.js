@@ -1,7 +1,7 @@
 import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
 const el = (id) => document.getElementById(id);
-const toast = (t) => { const x = el('toast'); x.textContent = t; x.style.display='block'; setTimeout(()=>x.style.display='none', 1800); };
+const toast = (t) => { const x = el('toast'); x.textContent = t; x.style.display='block'; setTimeout(()=>x.style.display='none', 1600); };
 
 function getChannelId() {
   const ch = new URLSearchParams(location.search).get('ch');
@@ -17,6 +17,8 @@ const mediaStream = new MediaStream();
 let videoConsumer = null, audioConsumer = null;
 
 let statsTimer = null, lastBytes = 0, lastTs = 0;
+const qualitySel = document.getElementById('qualitySel');
+let supportsQualityMenu = true;
 
 function skeleton(show){ el('skel').style.display = show ? 'block' : 'none'; el('remote').style.display = show ? 'none' : 'block'; }
 
@@ -28,14 +30,21 @@ function setQualityBadge(kbps, plr){
   q.className = cls; q.textContent = txt;
 }
 
-async function loadDevice(){ const caps = await new Promise(res => socket.emit('getRtpCapabilities', res)); const d = new mediasoupClient.Device(); await d.load({ routerRtpCapabilities: caps }); return d; }
+async function loadDevice(){
+  const caps = await new Promise(res => socket.emit('getRtpCapabilities', res));
+  device = new mediasoupClient.Device(); await device.load({ routerRtpCapabilities: caps });
+
+  // If no VP8 is offered, we are likely on Safari/H264 → disable quality menu (single layer)
+  const hasVp8 = device.rtpCapabilities.codecs.some(c => /video\/VP8/i.test(c.mimeType));
+  if (!hasVp8) { supportsQualityMenu = false; if (qualitySel){ qualitySel.disabled = true; qualitySel.title = 'Quality selection not available on this device'; } }
+}
 
 async function makeRecvTransport() {
   const params = await new Promise(res => socket.emit('createRecvTransport', { channelId }, res));
   if (params?.error) throw new Error(params.error);
   const t = device.createRecvTransport(params);
   t.on('connect', ({ dtlsParameters }, callback, errback) => {
-    socket.emit('connectRecvTransport', { channelId, dtlsParameters }, (r) => r === 'ok' ? callback() : errback(new Error('connect failed')));
+    socket.emit('connectRecvTransport', { channelId, dtlsParameters }, (r)=> r==='ok' ? callback() : errback(new Error('connect failed')));
   });
   return t;
 }
@@ -85,31 +94,45 @@ function startStats(){
 }
 
 async function watch() {
-  if (!channelId) { el('status').textContent = 'Pick a channel first (Broadcaster 1 or 2)'; return; }
+  if (!channelId) { el('status').textContent = 'Pick a channel above (Broadcaster 1 or 2)'; return; }
   try {
     el('status').textContent = 'Connecting…'; skeleton(true);
-    socket.emit('join', { channelId }, ()=>{});
-    device = await loadDevice();
+    await new Promise(res => socket.emit('join', { channelId }, res));
+    await loadDevice();
     recvTransport = await makeRecvTransport();
     videoConsumer = await consumeKind('video');
     audioConsumer = await consumeKind('audio');
-
     if (videoConsumer) { el('live').textContent = 'LIVE'; skeleton(false); startStats(); }
     else { el('live').textContent = 'Waiting for broadcaster…'; }
     el('status').textContent = '📺 Watching';
   } catch (e) { console.error(e); el('status').textContent = e.message || 'Error starting viewer'; }
 }
 
+// server notifications
 socket.on('newProducer', async ({ channelId: cid, kind }) => {
   if (cid !== channelId || !device || !recvTransport) return;
   try { await reconsume(kind); } catch(e){ console.error(e); }
 });
-
 socket.on('viewerCount', ({ count }) => { el('vc').textContent = `👀 ${count}`; });
 socket.on('connect', () => toast('Connected'));
 socket.io.on('reconnect_attempt', () => toast('Reconnecting…'));
 socket.on('disconnect', () => toast('Disconnected'));
 
 el('watch').onclick = watch;
-el('fs').onclick = async () => { const v = el('remote'); if (!document.fullscreenElement) await v.requestFullscreen().catch(()=>{}); else await document.exitFullscreen().catch(()=>{}); };
-el('pip').onclick = async () => { const v = el('remote'); if (document.pictureInPictureElement) await document.exitPictureInPicture().catch(()=>{}); else if (document.pictureInPictureEnabled) await v.requestPictureInPicture().catch(()=>{}); };
+
+// quality menu → change simulcast layer (0/1/2). If disabled, this does nothing.
+if (qualitySel) {
+  qualitySel.onchange = async () => {
+    if (!supportsQualityMenu) return;
+    const map = { low:0, med:1, high:2 };
+    const v = qualitySel.value; const spatialLayer = map[v];
+    await new Promise(res => socket.emit('setPreferredLayers', { channelId, spatialLayer: (typeof spatialLayer === 'number' ? spatialLayer : 2) }, res));
+  };
+}
+
+// Fullscreen only (no PiP)
+document.getElementById('fs').onclick = async () => {
+  const v = el('remote');
+  if (!document.fullscreenElement) await v.requestFullscreen().catch(()=>{});
+  else await document.exitFullscreen().catch(()=>{});
+};
