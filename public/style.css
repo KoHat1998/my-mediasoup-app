@@ -135,11 +135,42 @@ video{
 .header{ padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }
 .footer{ padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }
 
+/* YouTube-like player overlay */
 .player { position: relative; display: inline-block; width: 100%; max-width: 900px; }
-.player video { display:block; width:100%; height:auto; border-radius: var(--radius); border:1px solid rgba(255,255,255,.12); }
+.player video { display:block; width:100%; height:auto; border-radius: var(--radius); border:1px solid rgba(255,255,255,.12); background:#000; }
 
-.player .overlay { position:absolute; left:0; right:0; opacity:0; transition:opacity .2s ease; display:flex; align-items:center; padding:8px 10px; }
-.player .overlay.top-left { top:10px; left:10px; right:auto; gap:8px; opacity:1; pointer-events:none; } /* badges always visible */
-.player .overlay.bottom { bottom:10px; left:10px; right:10px; justify-content:space-between; background:linear-gradient(transparent, rgba(0,0,0,.35)); border-radius:10px; }
+.player .overlay {
+  position:absolute; left:0; right:0; opacity:0; transition:opacity .2s ease;
+  display:flex; align-items:center; padding:8px 10px;
+}
+.player .overlay.top-left { top:10px; left:10px; right:auto; gap:8px; opacity:1; pointer-events:none; }
+.player .overlay.bottom { bottom:0; left:0; right:0; padding:8px 12px; background:linear-gradient(transparent, rgba(0,0,0,.6)); }
 .player:hover .overlay.bottom { opacity:1; }
-.player .group { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+.ytbar { justify-content:space-between; }
+.ytbar .left{ display:flex; align-items:center; gap:8px; }
+.ytbar .right{ display:flex; align-items:center; gap:6px; }
+
+/* tiny icon buttons */
+.icon-btn{
+  width:36px; height:36px; border:none; background:transparent; border-radius:6px; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center;
+}
+.icon-btn:hover{ background: rgba(255,255,255,.12); }
+.icon{ width:22px; height:22px; fill:#fff; opacity:.95; }
+
+/* settings (quality) dropdown disguised as gear */
+.icon-wrap{ position:relative; display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:6px; }
+.icon-wrap:hover{ background: rgba(255,255,255,.12); }
+.icon-wrap .icon{ pointer-events:none; }
+.ytselect{
+  position:absolute; right:0; bottom:110%; /* open upward */
+  appearance:none; background:#111827; color:#fff; border:1px solid rgba(255,255,255,.18);
+  border-radius:8px; padding:6px 8px; font-size:.9rem; display:none;
+}
+.icon-wrap:focus-within .ytselect,
+.icon-wrap:active .ytselect{ display:block; }
+.ytselect option{ background:#111827; }
+
+/* keep badges compact */
+.badge{ font-size:.8rem; padding:3px 8px; }

@@ -29,29 +29,38 @@
       <div class="player" id="player">
         <video id="remote" autoplay playsinline></video>
 
+        <!-- top-left badges (always visible) -->
         <div class="overlay top-left">
           <span id="live" class="badge">Checking…</span>
           <span id="vc" class="badge">👀 0</span>
         </div>
 
-        <div class="overlay bottom">
-          <div class="group">
-            <button id="watch" class="btn">Watch</button>
-          </div>
-          <div class="group">
-            <select id="qualitySel" class="btn">
-              <option value="auto">Auto</option>
-              <option value="high">High</option>
-              <option value="med">Medium</option>
-              <option value="low">Low</option>
-            </select>
-            <button id="fs" class="btn ghost">Fullscreen</button>
+        <!-- bottom bar (shows on hover) -->
+        <div class="overlay bottom ytbar">
+          <div class="left"></div>
+          <div class="right">
+            <!-- quality menu as a small settings dropdown -->
+            <label class="icon-wrap">
+              <svg viewBox="0 0 24 24" class="icon"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zm8.94 3.34l-1.22-.71.11-1.41-1.37-2.37-1.41.11-.71-1.22L13.66 3h-3.32l-.68 1.24-1.41-.11-1.37 2.37.11 1.41-1.22.71L3 10.34v3.32l1.24.68-.11 1.41 1.37 2.37 1.41-.11.68 1.24 2.37 1.37h3.32l.71-1.22 1.41.11 1.37-2.37-.11-1.41 1.22-.71L21 13.66v-3.32z"/></svg>
+              <select id="qualitySel" class="ytselect">
+                <option value="auto">Auto</option>
+                <option value="high">High</option>
+                <option value="med">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+
+            <!-- fullscreen button -->
+            <button id="fs" class="icon-btn" title="Fullscreen">
+              <svg viewBox="0 0 24 24" class="icon"><path d="M7 14H5v5h5v-2H7v-3zm12 0h-2v3h-3v2h5v-5zM7 7h3V5H5v5h2V7zm12 3V5h-5v2h3v3h2z"/></svg>
+            </button>
           </div>
         </div>
       </div>
 
       <div id="skel" class="skel" style="margin:12px auto 0;"></div>
 
+      <!-- small readouts under the player -->
       <div class="badges" style="justify-content:center">
         <span id="res" class="badge">–</span>
         <span id="quality" class="badge">–</span>

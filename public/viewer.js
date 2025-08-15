@@ -1,12 +1,11 @@
 import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
 const el = (id) => document.getElementById(id);
-const toast = (t) => { const x = el('toast'); x.textContent = t; x.style.display='block'; setTimeout(()=>x.style.display='none', 1600); };
+const toast = (t) => { const x = el('toast'); if (!x) return; x.textContent = t; x.style.display='block'; setTimeout(()=>x.style.display='none', 1600); };
 
 function getChannelId() {
   const ch = new URLSearchParams(location.search).get('ch');
-  if (!['b1','b2'].includes(ch)) return null;
-  return ch;
+  return ['b1','b2'].includes(ch) ? ch : null;
 }
 const channelId = getChannelId();
 if (channelId) document.title = (channelId === 'b1' ? 'Broadcaster 1' : 'Broadcaster 2') + ' • Watch';
@@ -33,10 +32,8 @@ function setQualityBadge(kbps, plr){
 async function loadDevice(){
   const caps = await new Promise(res => socket.emit('getRtpCapabilities', res));
   device = new mediasoupClient.Device(); await device.load({ routerRtpCapabilities: caps });
-
-  // If no VP8 is offered, we are likely on Safari/H264 → disable quality menu (single layer)
   const hasVp8 = device.rtpCapabilities.codecs.some(c => /video\/VP8/i.test(c.mimeType));
-  if (!hasVp8) { supportsQualityMenu = false; if (qualitySel){ qualitySel.disabled = true; qualitySel.title = 'Quality selection not available on this device'; } }
+  if (!hasVp8 && qualitySel) { supportsQualityMenu = false; qualitySel.disabled = true; qualitySel.title = 'Quality not available on this device'; }
 }
 
 async function makeRecvTransport() {
@@ -110,7 +107,8 @@ async function watch() {
 
 // server notifications
 socket.on('newProducer', async ({ channelId: cid, kind }) => {
-  if (cid !== channelId || !device || !recvTransport) return;
+  if (cid && cid !== channelId) return;
+  if (!device || !recvTransport) return;
   try { await reconsume(kind); } catch(e){ console.error(e); }
 });
 socket.on('viewerCount', ({ count }) => { el('vc').textContent = `👀 ${count}`; });
@@ -118,9 +116,7 @@ socket.on('connect', () => toast('Connected'));
 socket.io.on('reconnect_attempt', () => toast('Reconnecting…'));
 socket.on('disconnect', () => toast('Disconnected'));
 
-el('watch').onclick = watch;
-
-// quality menu → change simulcast layer (0/1/2). If disabled, this does nothing.
+// quality menu → change simulcast layer
 if (qualitySel) {
   qualitySel.onchange = async () => {
     if (!supportsQualityMenu) return;
@@ -130,9 +126,14 @@ if (qualitySel) {
   };
 }
 
-// Fullscreen only (no PiP)
+// Fullscreen
 document.getElementById('fs').onclick = async () => {
   const v = el('remote');
   if (!document.fullscreenElement) await v.requestFullscreen().catch(()=>{});
   else await document.exitFullscreen().catch(()=>{});
 };
+
+// ------ AUTO‑PLAY on page load if channelId exists ------
+document.addEventListener('DOMContentLoaded', () => {
+  if (channelId) watch();
+});
