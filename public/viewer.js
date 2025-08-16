@@ -18,6 +18,7 @@ const mediaStream = new MediaStream();
 let videoConsumer = null, audioConsumer = null;
 
 let statsTimer = null, lastBytes = 0, lastTs = 0;
+let lastResP = ''; // remember last displayed resolution to avoid DOM churn
 
 // Outside quality selector (below the video)
 const qualitySel = document.getElementById('qualitySel');
@@ -76,9 +77,6 @@ async function consumeKind(kind) {
 
   consumer.on('producerclose', async () => { try { await reconsume(kind); } catch(e){ console.error(e); } });
 
-  if (kind === 'video') {
-    const r = el('res'); if (r) r.textContent = '720p'; // static label (optional)
-  }
   return consumer;
 }
 
@@ -92,12 +90,39 @@ async function reconsume(kind){
   else { try{ audioConsumer?.close(); }catch{} audioConsumer = newConsumer; }
 }
 
+function updateResolutionBadgeFromStats(stats) {
+  let w = 0, h = 0;
+
+  stats.forEach(s => {
+    // Chrome/Edge usually put frameWidth/Height on 'inbound-rtp'
+    if (s.type === 'inbound-rtp' && !s.isRemote) {
+      if (typeof s.frameWidth === 'number')  w = s.frameWidth;
+      if (typeof s.frameHeight === 'number') h = s.frameHeight;
+    }
+    // Safari/WebKit often exposes it on the 'track' stats
+    if (s.type === 'track' && s.kind === 'video') {
+      if (typeof s.frameWidth === 'number')  w = s.frameWidth || w;
+      if (typeof s.frameHeight === 'number') h = s.frameHeight || h;
+    }
+  });
+
+  if (h) {
+    const label = `${h}p`;
+    if (label !== lastResP) {
+      const r = el('res'); if (r) r.textContent = label;
+      lastResP = label;
+    }
+  }
+}
+
 function startStats(){
   if (statsTimer) clearInterval(statsTimer);
-  lastBytes = 0; lastTs = 0;
+  lastBytes = 0; lastTs = 0; lastResP = '';
   statsTimer = setInterval(async ()=>{
     if (!videoConsumer) return;
     const stats = await videoConsumer.getStats();
+
+    // bitrate / packet loss readout
     let bytes=0, timestamp=0, pl=0, pr=0;
     stats.forEach(s => { if (s.type === 'inbound-rtp' && !s.isRemote) { bytes = s.bytesReceived; timestamp = s.timestamp; pl = s.packetsLost || 0; pr = s.packetsReceived || 0; }});
     if (lastTs && timestamp && bytes >= lastBytes) {
@@ -106,7 +131,10 @@ function startStats(){
       setQualityBadge(kbps, plr);
     }
     lastBytes = bytes; lastTs = timestamp;
-  }, 3000);
+
+    // resolution badge from stats
+    updateResolutionBadgeFromStats(stats);
+  }, 2000);
 }
 
 async function watch() {
@@ -140,9 +168,22 @@ socket.on('disconnect', () => toast('Disconnected'));
 if (qualitySel) {
   qualitySel.onchange = async () => {
     if (!supportsQualityMenu) return;
+
+    // Set preferred layer on the server
     const map = { low:0, med:1, high:2 };
-    const v = qualitySel.value; const spatialLayer = map[v];
-    await new Promise(res => socket.emit('setPreferredLayers', { channelId, spatialLayer: (typeof spatialLayer === 'number' ? spatialLayer : 2) }, res));
+    const v = qualitySel.value; 
+    const spatialLayer = map[v];
+
+    // Show a temporary requested label until stats confirm
+    const targetHeights = { low:360, med:540, high:720 };
+    const r = el('res');
+    if (r && targetHeights[v]) r.textContent = `${targetHeights[v]}p (requested)`;
+
+    await new Promise(res => socket.emit('setPreferredLayers', {
+      channelId,
+      spatialLayer: (typeof spatialLayer === 'number' ? spatialLayer : 2)
+    }, res));
+    // Stats loop will soon update to the *actual* resolution received.
   };
 }
 
