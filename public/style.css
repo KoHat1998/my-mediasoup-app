@@ -1,9 +1,7 @@
 :root{
-  /* fixed sizes so header/footer are always fully visible */
-  --header-h: 84px;       /* desktop header */
+  --header-h: 84px;
   --footer-h: 56px;
 
-  /* theme */
   --bg1:#0f1226; --bg2:#1b1f3b;
   --primary:#8f94fb; --accent:#4e54c8;
   --text:#fff; --muted:#cfd2ff;
@@ -13,40 +11,33 @@
 /* Base layout */
 html, body { height: 100%; }
 body{
-  margin:0;
-  color:var(--text);
+  margin:0; color:var(--text);
   font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif;
   background: radial-gradient(1000px 600px at 20% 0%, var(--bg2), transparent),
               linear-gradient(135deg, var(--bg1), var(--bg2));
-
-  /* keep header/footer visible and content not hidden under them */
   padding-top: calc(var(--header-h) + env(safe-area-inset-top, 0px));
   padding-bottom: calc(var(--footer-h) + env(safe-area-inset-bottom, 0px));
 }
 
-/* Fixed header & footer */
+/* Header & footer */
 .header, .footer{
   position: fixed; left: 0; right: 0; z-index: 1000;
   background: rgba(255,255,255,.06); backdrop-filter: blur(6px);
   display:flex; align-items:center; justify-content:space-between;
-  padding: 0 16px;
-  border-bottom: 1px solid rgba(255,255,255,.08);
+  padding: 0 16px; border-bottom: 1px solid rgba(255,255,255,.08);
 }
 .header{ top: 0; height: var(--header-h); }
 .footer{
   bottom: 0; height: var(--footer-h);
-  border-top: 1px solid rgba(255,255,255,.08);
-  border-bottom: none;
+  border-top: 1px solid rgba(255,255,255,.08); border-bottom: none;
 }
-
-/* Header content */
 .brand{
   font-weight: 800; letter-spacing: .3px; text-decoration: none; color: var(--text);
   display: inline-flex; align-items: center; gap: 8px; font-size: 1.1rem;
 }
 .actions{ display:flex; gap: 10px; align-items:center; flex-wrap: nowrap; }
 
-/* Main container lives between fixed header & footer */
+/* Main area */
 .main{
   width: 100%; max-width: 1000px; margin: 0 auto; padding: 16px;
   min-height: calc(100vh - var(--header-h) - var(--footer-h));
@@ -58,14 +49,13 @@ body{
   background: rgba(255,255,255,.06);
   border: 1px solid rgba(255,255,255,.1);
   border-radius: var(--radius);
-  padding: 24px;
-  box-shadow: var(--shadow);
-  text-align:center;
+  padding: 24px; box-shadow: var(--shadow); text-align:center;
 }
 video{
   width: 100%; max-width: 900px;
   border-radius: var(--radius);
   border: 1px solid rgba(255,255,255,.12);
+  background:#000;
 }
 
 /* Buttons */
@@ -78,14 +68,12 @@ video{
 }
 .btn.big{ padding: 16px 24px; font-size: 1.05rem; }
 .btn.ghost{
-  background: transparent;
-  border: 1px solid rgba(255,255,255,.25);
-  box-shadow: none;
+  background: transparent; border: 1px solid rgba(255,255,255,.25); box-shadow: none;
 }
 .btn:active{ transform: translateY(1px); }
 .btn[disabled]{ opacity:.6; cursor:not-allowed; }
 
-/* Status badges */
+/* Badges */
 .badges{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0 0; }
 .badge{ padding:4px 10px; border-radius:999px; font-size:.85rem; background:rgba(255,255,255,.08); }
 .badge.live{ background:#e11d48; }
@@ -99,7 +87,7 @@ video{
   border:1px solid rgba(255,255,255,.08); display:none;
 }
 
-/* Skeleton block for loading */
+/* Skeleton */
 .skel{
   width:100%; max-width:900px; height:360px; border-radius:var(--radius);
   background:linear-gradient(90deg, rgba(255,255,255,.06), rgba(255,255,255,.02), rgba(255,255,255,.06));
@@ -108,7 +96,7 @@ video{
 }
 @keyframes shine{ 0%{background-position:200% 0} 100%{background-position:-200% 0} }
 
-/* Simple “logo” mark on the hero */
+/* Logo (home) */
 .logo{
   width:90px; height:90px; border-radius:22px;
   background: conic-gradient(from 180deg, var(--accent), var(--primary));
@@ -116,6 +104,29 @@ video{
   margin: 0 auto 12px; box-shadow: var(--shadow);
   border: 1px solid rgba(255,255,255,.18);
   font-weight: 800; font-size: 1.4rem;
+}
+
+/* Player wrapper */
+.player { position: relative; display: inline-block; width: 100%; max-width: 900px; }
+.player video { display:block; width:100%; height:auto; }
+
+/* Overlay (we only keep top-left) */
+.player .overlay{
+  position:absolute; left:0; right:auto; display:flex; align-items:center; gap:8px; padding:8px 10px;
+  opacity:0; transition:opacity .2s ease;
+}
+.player .overlay.top-left{ top:10px; left:10px; opacity:1; pointer-events:none; }
+
+/* Outside toolbar (quality) */
+.toolbar{
+  display:flex; gap:10px; align-items:center; justify-content:center;
+  margin: 12px auto 0;
+}
+.toolbar label{ opacity:.9; }
+.toolbar select{
+  appearance:none; background:#111827; color:#fff; border:1px solid rgba(255,255,255,.18);
+  border-radius:10px; padding:8px 10px; min-width: 140px; cursor:pointer;
+  box-shadow: var(--shadow);
 }
 
 /* Responsive */
@@ -130,82 +141,6 @@ video{
   .actions .btn{ width: 100%; }
 }
 
-/* Respect iOS safe areas for header/footer edges */
+/* iOS safe areas */
 .header{ padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }
 .footer{ padding-left: calc(16px + env(safe-area-inset-left, 0px)); padding-right: calc(16px + env(safe-area-inset-right, 0px)); }
-
-/* ---------- YouTube-like player overlay (top-left badges + top-right controls) ---------- */
-.player { position: relative; display: inline-block; width: 100%; max-width: 900px; }
-.player video { display:block; width:100%; height:auto; border-radius: var(--radius); border:1px solid rgba(255,255,255,.12); background:#000; }
-
-/* base overlay hidden by default */
-.player .overlay {
-  position:absolute; left:0; right:0; opacity:0; transition:opacity .2s ease;
-  display:flex; align-items:center; padding:8px 10px;
-}
-
-/* top-left badges are always visible & non-clickable */
-.player .overlay.top-left {
-  top:10px; left:10px; right:auto; gap:8px; opacity:1; pointer-events:none;
-}
-
-/* top-right controls (quality + fullscreen) are always visible and clickable */
-.player .overlay.top-right {
-  top:10px; right:10px; left:auto; gap:8px;
-  opacity: 1;            /* make it visible */
-  pointer-events: auto;  /* allow clicks */
-}
-
-/* (optional) bottom hover bar – keep if you ever reuse it */
-.player .overlay.bottom { bottom:0; left:0; right:0; padding:8px 12px; background:linear-gradient(transparent, rgba(0,0,0,.6)); }
-.player:hover .overlay.bottom { opacity:1; }
-
-.ytbar { justify-content:space-between; }
-.ytbar .left{ display:flex; align-items:center; gap:8px; }
-.ytbar .right{ display:flex; align-items:center; gap:6px; }
-
-/* tiny icon buttons */
-.icon-btn{
-  width:36px; height:36px; border:none; background:transparent; border-radius:6px; cursor:pointer;
-  display:inline-flex; align-items:center; justify-content:center;
-}
-.icon-btn:hover{ background: rgba(255,255,255,.12); }
-.icon{ width:22px; height:22px; fill:#fff; opacity:.95; }
-
-/* settings (quality) dropdown disguised as gear */
-.icon-wrap{ position:relative; display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:6px; cursor:pointer; }
-.icon-wrap:hover{ background: rgba(255,255,255,.12); }
-.icon-wrap .icon{ pointer-events:none; }
-.ytselect{
-  position:absolute; right:0; bottom:110%; /* open upward */
-  appearance:none; background:#111827; color:#fff; border:1px solid rgba(255,255,255,.18);
-  border-radius:8px; padding:6px 8px; font-size:.9rem; display:none; min-width: 120px;
-}
-.icon-wrap:focus-within .ytselect,
-.icon-wrap:active .ytselect{ display:block; }
-.ytselect option{ background:#111827; }
-
-/* keep badges compact */
-.badge{ font-size:.8rem; padding:3px 8px; }
-
-/* --- Keep overlays visible in container fullscreen --- */
-.player:fullscreen,
-.player:-webkit-full-screen {
-  background: #000;
-}
-.player:fullscreen .overlay,
-.player:-webkit-full-screen .overlay {
-  opacity: 1;
-  z-index: 10;
-}
-/* scale the video to fit fullscreen neatly */
-.player:fullscreen video,
-.player:-webkit-full-screen video {
-  width: 100vw;
-  height: 100vh;
-  object-fit: contain;
-  border: none;
-  border-radius: 0;
-}
-/* badges shouldn't block clicks on native controls */
-.player .overlay.top-left .badge { pointer-events: none; }

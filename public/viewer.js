@@ -19,7 +19,7 @@ let videoConsumer = null, audioConsumer = null;
 
 let statsTimer = null, lastBytes = 0, lastTs = 0;
 
-// optional: if you later add an external quality selector with id="qualitySel"
+// Outside quality selector (below the video)
 const qualitySel = document.getElementById('qualitySel');
 let supportsQualityMenu = true;
 
@@ -45,7 +45,7 @@ async function loadDevice(){
   const caps = await new Promise(res => socket.emit('getRtpCapabilities', res));
   device = new mediasoupClient.Device(); await device.load({ routerRtpCapabilities: caps });
 
-  // if you decide to gate the external quality menu by codec support
+  // If you want to gate the menu by codec support
   const hasVp8 = device.rtpCapabilities.codecs.some(c => /video\/VP8/i.test(c.mimeType));
   if (!hasVp8 && qualitySel) { supportsQualityMenu = false; qualitySel.disabled = true; qualitySel.title = 'Quality not available on this device'; }
 }
@@ -77,7 +77,7 @@ async function consumeKind(kind) {
   consumer.on('producerclose', async () => { try { await reconsume(kind); } catch(e){ console.error(e); } });
 
   if (kind === 'video') {
-    const r = el('res'); if (r) r.textContent = '720p'; // static label; you can compute from stats if you want
+    const r = el('res'); if (r) r.textContent = '720p'; // static label (optional)
   }
   return consumer;
 }
@@ -136,7 +136,7 @@ socket.on('connect', () => toast('Connected'));
 socket.io.on('reconnect_attempt', () => toast('Reconnecting…'));
 socket.on('disconnect', () => toast('Disconnected'));
 
-// (optional) external quality menu outside the player
+// External quality menu (outside the player)
 if (qualitySel) {
   qualitySel.onchange = async () => {
     if (!supportsQualityMenu) return;
@@ -146,28 +146,12 @@ if (qualitySel) {
   };
 }
 
-// ---- Fullscreen: request fullscreen on the CONTAINER so overlays can stay ----
-const fsBtn = document.getElementById('fs');
-if (fsBtn) {
-  fsBtn.onclick = async () => {
-    // prefer a wrapper with id="player" (position:relative; contains video + overlays)
-    const container = document.getElementById('player') || el('remote');
-    if (!document.fullscreenElement) await container.requestFullscreen().catch(()=>{});
-    else await document.exitFullscreen().catch(()=>{});
-  };
-}
-// Toggle a class on fullscreen to let CSS pin overlays correctly
-document.addEventListener('fullscreenchange', () => {
-  const container = document.getElementById('player');
-  if (container) container.classList.toggle('is-fs', !!document.fullscreenElement);
-});
-
-// ------ AUTO‑PLAY on page load if channelId exists ------
+// Auto-play if channelId present
 document.addEventListener('DOMContentLoaded', () => {
   if (channelId) watch();
 });
 
-// (Optional) Expose a small API your friend’s app can call to change quality:
+// Small API for external apps (or your page) to control quality
 window.kohatViewer = {
   setQuality: async (level /* 'low' | 'med' | 'high' */) => {
     const map = { low:0, med:1, high:2 };

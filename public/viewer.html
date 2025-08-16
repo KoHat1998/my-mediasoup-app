@@ -25,44 +25,36 @@
         <a class="btn" href="/viewer.html?ch=b2">Broadcaster 2</a>
       </div>
 
-      <!-- player wrapper goes fullscreen (not the <video>) -->
+      <!-- player wrapper (no custom buttons; native controls only) -->
       <div class="player" id="player">
-        <!-- top-left badges (always visible) -->
+        <!-- top-left badges -->
         <div class="overlay top-left">
           <span id="live" class="badge">Checking…</span>
           <span id="vc" class="badge">👀 0</span>
         </div>
 
-        <!-- top-right: quality dropdown + fullscreen (keeps showing in container fullscreen) -->
-        <div class="overlay top-right">
-          <label class="icon-wrap" title="Quality">
-            <svg viewBox="0 0 24 24" class="icon"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zm8.94 3.34l-1.22-.71.11-1.41-1.37-2.37-1.41.11-.71-1.22L13.66 3h-3.32l-.68 1.24-1.41-.11-1.37 2.37.11 1.41-1.22.71L3 10.34v3.32l1.24.68-.11 1.41 1.37 2.37 1.41-.11.68 1.24 2.37 1.37h3.32l.71-1.22 1.41.11 1.37-2.37-.11-1.41 1.22-.71L21 13.66v-3.32z"/></svg>
-            <select id="qualitySel" class="ytselect">
-              <option value="auto">Auto</option>
-              <option value="high">High</option>
-              <option value="med">Medium</option>
-              <option value="low">Low</option>
-            </select>
-          </label>
-
-          <button id="fs" class="icon-btn" title="Fullscreen">
-            <svg viewBox="0 0 24 24" class="icon"><path d="M7 14H5v5h5v-2H7v-3zm12 0h-2v3h-3v2h5v-5zM7 7h3V5H5v5h2V7zm12 3V5h-5v2h3v3h2z"/></svg>
-          </button>
-        </div>
-
-        <!-- Native browser controls; hide native fullscreen button (we fullscreen the container) -->
         <video
           id="remote"
           autoplay
           playsinline
           controls
-          controlslist="nodownload noplaybackrate noremoteplayback nofullscreen"
+          controlslist="nodownload noplaybackrate noremoteplayback"
           disablepictureinpicture
           disableremoteplayback
         ></video>
       </div>
 
-      <!-- loading skeleton (shown while connecting) -->
+      <!-- outside toolbar (quality only) -->
+      <div class="toolbar">
+        <label for="qualitySel">Quality</label>
+        <select id="qualitySel">
+          <option value="auto">Auto</option>
+          <option value="high">High</option>
+          <option value="med">Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+
       <div id="skel" class="skel" style="margin:12px auto 0;"></div>
 
       <!-- small readouts under the player -->
