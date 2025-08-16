@@ -5,139 +5,211 @@
   <title>KoHat Live Player</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      background: black;
-      height: 100%;
-      width: 100%;
-    }
-    video {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      background: black;
-    }
+    html, body { margin:0; padding:0; background:#000; height:100%; width:100%; }
+    #wrap { position:relative; width:100%; height:100%; }
+    video { width:100%; height:100%; object-fit:contain; background:#000; }
     #live {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      padding: 4px 8px;
-      background: red;
-      color: white;
-      font-size: 14px;
-      border-radius: 4px;
-      font-family: sans-serif;
+      position:absolute; top:10px; left:10px; padding:4px 8px; border-radius:6px;
+      color:#fff; font:14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background:#374151;
     }
   </style>
 </head>
 <body>
-  <div style="position:relative;width:100%;height:100%;">
+  <div id="wrap">
     <video id="remote" autoplay playsinline></video>
     <span id="live">Connecting…</span>
   </div>
 
-  <script src="/socket.io/socket.io.js"></script>
+  <!-- Use absolute URL so it also works when this file is embedded from other apps -->
+  <script src="https://kohat.duckdns.org/socket.io/socket.io.js"></script>
   <script type="module">
     import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
-    const el = (id) => document.getElementById(id);
+    const $ = (id) => document.getElementById(id);
 
-    function getChannelId() {
-      const ch = new URLSearchParams(location.search).get('ch');
-      if (!['b1','b2'].includes(ch)) return null;
-      return ch;
-    }
-    const channelId = getChannelId();
-    if (channelId) document.title = channelId === 'b1' ? 'Broadcaster 1' : 'Broadcaster 2';
+    // --------- Config & state ---------
+    let host = location.origin; // default to current origin
+    let channelId = new URLSearchParams(location.search).get('ch');
+    if (!['b1','b2'].includes(channelId)) channelId = null;
 
-    const socket = io();
-    let device, recvTransport;
+    let socket, device, recvTransport;
     const mediaStream = new MediaStream();
     let videoConsumer = null, audioConsumer = null;
+    let statsTimer = null;
 
-    function attachTrack(kind, track){
-      if (kind === 'video') {
-        const old = mediaStream.getVideoTracks()[0];
-        if (old) mediaStream.removeTrack(old);
-        mediaStream.addTrack(track);
-      } else {
-        const old = mediaStream.getAudioTracks()[0];
-        if (old) mediaStream.removeTrack(old);
-        mediaStream.addTrack(track);
-      }
-      if (!el('remote').srcObject) el('remote').srcObject = mediaStream;
+    // --------- Helpers ---------
+    const ack = (event, payload) => new Promise(res => socket.emit(event, payload, res));
+
+    function setLive(text, live=false) {
+      const badge = $('live'); if (!badge) return;
+      badge.textContent = text;
+      badge.style.background = live ? '#e11d48' : '#374151';
     }
 
-    async function loadDevice(){
-      const caps = await new Promise(res => socket.emit('getRtpCapabilities', res));
+    function emitEvent(type, payload = {}) {
+      // Flutter/WebView bridge; safe no-op otherwise
+      if (window.flutter_inappwebview?.callHandler) {
+        window.flutter_inappwebview.callHandler('playerEvent', { type, ...payload });
+      }
+      // You can also mirror to window for debugging:
+      // window.dispatchEvent(new CustomEvent('playerEvent', { detail: { type, ...payload }}));
+    }
+
+    function attachTrack(kind, track) {
+      if (kind === 'video') {
+        const old = mediaStream.getVideoTracks()[0]; if (old) mediaStream.removeTrack(old);
+        mediaStream.addTrack(track);
+      } else {
+        const old = mediaStream.getAudioTracks()[0]; if (old) mediaStream.removeTrack(old);
+        mediaStream.addTrack(track);
+      }
+      const v = $('remote');
+      if (v && !v.srcObject) { v.srcObject = mediaStream; v.play?.().catch(()=>{}); }
+    }
+
+    async function loadDevice() {
+      const caps = await ack('getRtpCapabilities');
       device = new mediasoupClient.Device();
       await device.load({ routerRtpCapabilities: caps });
     }
 
     async function makeRecvTransport() {
-      const params = await new Promise(res => socket.emit('createRecvTransport', { channelId }, res));
+      const params = await ack('createRecvTransport', { channelId });
       if (params?.error) throw new Error(params.error);
       const t = device.createRecvTransport(params);
       t.on('connect', ({ dtlsParameters }, callback, errback) => {
-        socket.emit('connectRecvTransport', { channelId, dtlsParameters }, (r) => {
-          r === 'ok' ? callback() : errback(new Error('connect failed'));
-        });
+        socket.emit('connectRecvTransport', { channelId, dtlsParameters }, (r)=> r==='ok' ? callback() : errback(new Error('connect failed')));
       });
       return t;
     }
 
     async function consumeKind(kind) {
-      const data = await new Promise(res => socket.emit('consume', { channelId, rtpCapabilities: device.rtpCapabilities, kind }, res));
+      const data = await ack('consume', { channelId, rtpCapabilities: device.rtpCapabilities, kind });
       if (data?.error) {
-        if (kind === 'video') el('live').textContent = 'Waiting for broadcaster…';
+        if (kind === 'video') { setLive('Waiting for broadcaster…', false); emitEvent('live', { live:false }); }
         return null;
       }
       const consumer = await recvTransport.consume(data);
       attachTrack(kind, consumer.track);
-      await new Promise(res => socket.emit('resume', { consumerId: consumer.id }, res));
+      await ack('resume', { consumerId: consumer.id });
       return consumer;
     }
 
-    async function watch() {
-      if (!channelId) {
-        el('live').textContent = 'No channel selected';
-        return;
-      }
-      try {
-        el('live').textContent = 'Connecting…';
-        await new Promise(res => socket.emit('join', { channelId }, res));
-        await loadDevice();
-        recvTransport = await makeRecvTransport();
-        videoConsumer = await consumeKind('video');
-        audioConsumer = await consumeKind('audio');
-        if (videoConsumer) {
-          el('live').textContent = 'LIVE';
-        } else {
-          el('live').textContent = 'Waiting for broadcaster…';
-        }
-      } catch (e) {
-        console.error(e);
-        el('live').textContent = 'Error: ' + (e.message || 'unknown');
-      }
+    function startStatsLoop() {
+      if (statsTimer) clearInterval(statsTimer);
+      let lastBytes = 0, lastTs = 0;
+      statsTimer = setInterval(async () => {
+        try {
+          if (!videoConsumer) return;
+          const stats = await videoConsumer.getStats();
+          let bytes=0, ts=0, w=0, h=0, pl=0, pr=0;
+
+          stats.forEach(s => {
+            if (s.type === 'inbound-rtp' && !s.isRemote) {
+              bytes = s.bytesReceived || bytes;
+              ts = s.timestamp || ts;
+              pl = s.packetsLost || pl;
+              pr = s.packetsReceived || pr;
+              if (typeof s.frameWidth === 'number')  w = s.frameWidth;
+              if (typeof s.frameHeight === 'number') h = s.frameHeight;
+            }
+            if (s.type === 'track' && s.kind === 'video') {
+              if (typeof s.frameWidth === 'number')  w = s.frameWidth || w;
+              if (typeof s.frameHeight === 'number') h = s.frameHeight || h;
+            }
+          });
+
+          if (h) emitEvent('resolution', { height: h });
+
+          if (ts && lastTs && bytes >= lastBytes) {
+            const kbps = ((bytes - lastBytes) * 8) / ((ts - lastTs) / 1000) / 1000;
+            const plr = pr > 0 ? (pl / (pr + pl)) * 100 : 0;
+            emitEvent('network', { kbps: Math.round(kbps), plr: +plr.toFixed(2) });
+          }
+          lastBytes = bytes; lastTs = ts;
+        } catch {}
+      }, 2000);
     }
 
-    // reconsume on new producer
-    socket.on('newProducer', async ({ channelId: cid, kind }) => {
-      if (cid !== channelId || !device || !recvTransport) return;
-      try {
-        const data = await new Promise(res => socket.emit('consume', { channelId, rtpCapabilities: device.rtpCapabilities, kind }, res));
-        if (!data?.error) {
-          const newConsumer = await recvTransport.consume(data);
-          attachTrack(kind, newConsumer.track);
-          await new Promise(res => socket.emit('resume', { consumerId: newConsumer.id }, res));
-          if (kind === 'video') videoConsumer = newConsumer;
-          else audioConsumer = newConsumer;
-        }
-      } catch (e) { console.error(e); }
-    });
+    async function startCore() {
+      if (!channelId) throw new Error('No channel selected');
 
-    watch();
+      // connect socket to chosen host
+      socket = window.io(host, { transports: ['websocket','polling'] });
+
+      // join room & viewer count
+      await ack('join', { channelId });
+      socket.on('viewerCount', ({ count }) => emitEvent('viewerCount', { count }));
+
+      // mediasoup flow
+      await loadDevice();
+      recvTransport = await makeRecvTransport();
+      videoConsumer = await consumeKind('video');
+      audioConsumer = await consumeKind('audio');
+
+      if (videoConsumer) { setLive('LIVE', true); emitEvent('live', { live:true }); startStatsLoop(); }
+      else               { setLive('Waiting for broadcaster…', false); emitEvent('live', { live:false }); }
+
+      // handle new producers (re-consume on the fly)
+      socket.on('newProducer', async ({ channelId: cid, kind }) => {
+        if (cid !== channelId || !device || !recvTransport) return;
+        try {
+          const data = await ack('consume', { channelId, rtpCapabilities: device.rtpCapabilities, kind });
+          if (!data?.error) {
+            const nc = await recvTransport.consume(data);
+            attachTrack(kind, nc.track);
+            await ack('resume', { consumerId: nc.id });
+            if (kind === 'video') videoConsumer = nc; else audioConsumer = nc;
+            setLive('LIVE', true); emitEvent('live', { live:true });
+          }
+        } catch (e) { console.error(e); }
+      });
+
+      emitEvent('ready', { channelId });
+    }
+
+    // --------- Public bridge (for Viewer app) ---------
+    window.PlayerBridge = {
+      init: async (opts) => {
+        try {
+          if (opts?.host) host = opts.host.replace(/\/$/, '');
+          if (opts?.channelId) channelId = opts.channelId;
+          await startCore();
+        } catch (e) {
+          setLive('Error', false);
+          emitEvent('error', { message: e?.message || String(e) });
+        }
+      },
+      setQuality: async (level /* 'low'|'med'|'high'|'auto' */) => {
+        if (!socket || !videoConsumer) return;
+        if (level === 'auto') return; // let WebRTC adapt
+        const map = { low:0, med:1, high:2 };
+        const spatialLayer = map[level] ?? 2;
+        await ack('setPreferredLayers', { channelId, spatialLayer });
+      },
+      changeChannel: async (newChannelId) => {
+        if (!['b1','b2'].includes(newChannelId)) return;
+        // cleanup
+        try { if (statsTimer) clearInterval(statsTimer); } catch {}
+        try { videoConsumer?.close(); audioConsumer?.close(); } catch {}
+        try { const v=$('remote'); v?.pause?.(); if (v) v.srcObject=null; } catch {}
+        channelId = newChannelId;
+        await startCore();
+      },
+      enterFullscreen: () => $('remote')?.requestFullscreen?.().catch(()=>{})
+    };
+
+    // --------- Standalone mode (URL ?ch=b1|b2) ---------
+    document.addEventListener('DOMContentLoaded', () => {
+      if (channelId) {
+        // default to current origin if no host passed
+        host = location.origin;
+        window.PlayerBridge.init({ host, channelId });
+      } else {
+        setLive('No channel selected', false);
+      }
+    });
   </script>
 </body>
 </html>
