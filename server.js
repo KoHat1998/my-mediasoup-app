@@ -54,7 +54,7 @@ const mediaCodecs = [
     parameters: { 'level-asymmetry-allowed': 1, 'packetization-mode': 1, 'profile-level-id': '42e01f' } }
 ];
 
-// Per‑channel state
+// Per-channel state
 const CHANNEL_IDS = ['b1', 'b2'];
 const channels = new Map(); // id -> { videoProducer, audioProducer }
 for (const id of CHANNEL_IDS) channels.set(id, { videoProducer: null, audioProducer: null });
@@ -83,9 +83,20 @@ async function createWebRtcTransport() {
   });
 }
 
+/**
+ * UPDATED: broadcast viewer count excluding the host socket(s).
+ */
 function broadcastViewerCount(channelId) {
   const rn = roomName(channelId);
-  const count = io.sockets.adapter.rooms.get(rn)?.size || 0;
+  const members = io.sockets.adapter.rooms.get(rn) || new Set();
+
+  let count = 0;
+  for (const sid of members) {
+    const s = io.sockets.sockets.get(sid);
+    // exclude any socket that is marked as the host for this channel
+    if (!s?.data?.isHostFor || s.data.isHostFor !== channelId) count++;
+  }
+
   io.to(rn).emit('viewerCount', { count });
 }
 
@@ -140,9 +151,22 @@ io.on('connection', (socket) => {
     if (!host || host !== channelId) throw new Error('not authorized for this channel');
   }
 
+  /**
+   * UPDATED: tag sockets when they join to indicate if they are the host for that channel.
+   * We read the cookie here the same way we do for the producer checks.
+   */
   socket.on('join', ({ channelId } = {}, cb = () => {}) => {
     const ch = getChannelIdFromPayload({ channelId });
     if (!ch) return cb({ error: 'invalid channelId' });
+
+    // Tag this socket as host for this channel if cookie matches.
+    try {
+      const cookies = parseCookie(socket.request.headers.cookie || '');
+      socket.data.isHostFor = (cookies.host === ch) ? ch : null;
+    } catch {
+      socket.data.isHostFor = null;
+    }
+
     socket.join(roomName(ch));
     broadcastViewerCount(ch);
     cb('ok');
@@ -219,7 +243,7 @@ io.on('connection', (socket) => {
   socket.on('createRecvTransport', async ({ channelId } = {}, cb) => {
     try {
       const ch = getChannelIdFromPayload({ channelId });
-    if (!ch) return cb({ error: 'invalid channelId' });
+      if (!ch) return cb({ error: 'invalid channelId' });
       const transport = await createWebRtcTransport();
       socket.data[`recvTransport_${ch}`] = transport;
       cb({
@@ -258,7 +282,7 @@ io.on('connection', (socket) => {
       list.push(consumer);
       consumers.set(socket.id, list);
 
-      // *** NEW: remember this viewer's video consumer so we can change its layer later
+      // remember this viewer's video consumer so we can change its layer later
       if (consumer.kind === 'video') {
         socket.data[`videoConsumer_${ch}`] = consumer;
       }
@@ -285,7 +309,7 @@ io.on('connection', (socket) => {
     cb('ok');
   });
 
-  // *** NEW: let viewer change preferred simulcast layer (for quality menu)
+  // let viewer change preferred simulcast layer (for quality menu)
   socket.on('setPreferredLayers', async ({ channelId, spatialLayer = 2, temporalLayer = null }, cb = () => {}) => {
     try {
       const ch = getChannelIdFromPayload({ channelId });
@@ -304,7 +328,7 @@ io.on('connection', (socket) => {
     for (const ch of CHANNEL_IDS) {
       try { socket.data[`sendTransport_${ch}`]?.close(); } catch {}
       try { socket.data[`recvTransport_${ch}`]?.close(); } catch {}
-      // *** ensure viewer count updates if this socket was in any room
+      // ensure viewer count updates if this socket was in any room
       broadcastViewerCount(ch);
     }
     const list = consumers.get(socket.id) || [];
