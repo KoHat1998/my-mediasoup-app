@@ -231,7 +231,7 @@ async function shareScreen(){
   el('status').textContent = 'Requesting screen…';
   skeleton(true);
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
     const t = stream.getVideoTracks()[0];
     if (t) t.onended = async () => { toast('Screen share ended'); try { await goLiveWithCamera(); } catch {} };
     await swapToStream(stream, 'screen');
