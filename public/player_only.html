@@ -203,7 +203,7 @@
     // --------- Standalone mode (URL ?ch=b1|b2) ---------
     document.addEventListener('DOMContentLoaded', () => {
       if (channelId) {
-        // default to current origin if no host passed
+        // default to curren  origin if no host passed
         host = location.origin;
         window.PlayerBridge.init({ host, channelId });
       } else {
