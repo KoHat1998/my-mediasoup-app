@@ -2,576 +2,399 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Live Player</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <title>KoHat Live Player</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      background: #000;
-      color: #fff;
-      height: 100%;
-      width: 100%;
-      overflow: hidden;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    #player-container {
-      position: relative;
-      width: 100%;
-      height: 100%;
-      display: flex; /* For centering status message initially */
-      align-items: center;
-      justify-content: center;
-    }
-    video#remote-video {
-      width: 100%;
-      height: 100%;
-      object-fit: contain; /* Or 'cover' if you prefer */
-      background: #000;
-      display: none; /* Initially hidden until stream is ready */
-    }
-    #status-overlay {
+    html, body { margin: 0; padding: 0; background: black; height: 100%; width: 100%; overflow: hidden; }
+    video { width: 100%; height: 100%; object-fit: contain; background: black; }
+    #status-overlay { /* Changed from #live for more general status */
       position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      padding: 10px 15px;
-      border-radius: 8px;
-      background: rgba(40, 40, 40, 0.85);
-      font-size: 16px;
-      line-height: 1.4;
-      text-align: center;
+      top: 10px;
+      left: 10px;
+      padding: 4px 8px;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      font-size: 14px;
+      border-radius: 4px;
+      font-family: sans-serif;
       z-index: 10;
-      color: #eee;
-    }
-    #status-overlay.live {
-      top: 20px;
-      left: 20px;
-      transform: none;
-      background: #e11d48; /* Red for LIVE */
-      color: #fff;
-    }
-    #status-overlay.error {
-      background: #b91c1c; /* Darker red for error */
-      color: #fff;
     }
   </style>
 </head>
 <body>
-  <div id="player-container">
-    <video id="remote-video" autoplay playsinline muted></video>
-    <div id="status-overlay">Initializing...</div>
+  <div style="position:relative;width:100%;height:100%;">
+    <video id="remoteVideo" autoplay playsinline></video>
+    <span id="status-overlay">Connecting…</span>
   </div>
 
-  <!-- Ensure this path is correct for your setup -->
-  <script src="https://kohat.duckdns.org/socket.io/socket.io.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
   <script type="module">
     import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
-    const $ = (id) => document.getElementById(id);
-    const remoteVideo = $('remote-video');
-    const statusOverlay = $('status-overlay');
+    const remoteVideoEl = document.getElementById('remoteVideo');
+    const statusOverlayEl = document.getElementById('status-overlay');
 
-    // --------- Config & State ---------
-    let config = {
-      host: null, // To be set by PlayerBridge.init
-      channelId: null, // To be set by PlayerBridge.init
-      validChannelIds: ['b1', 'b2'], // Example, customize or remove if not needed
-      socketIoTimeout: 15000, // 15 seconds for socket connection
-    };
-
-    let socket;
-    let device;
-    let recvTransport;
-    const mediaStream = new MediaStream();
-    let videoConsumer = null;
-    let audioConsumer = null;
-    let isPlayerInitialized = false;
-    let currentStatsTimer = null;
-
-    // --------- UI Helper ---------
-    function updateStatus(message, type = 'info') { // type: 'info', 'live', 'error', 'waiting'
-      if (!statusOverlay) return;
-      statusOverlay.textContent = message;
-      statusOverlay.className = ''; // Reset classes
-      if (type) {
-        statusOverlay.classList.add(type);
-      }
-      console.log(`[Player Status] ${type.toUpperCase()}: ${message}`);
-    }
-
-    // --------- Flutter Bridge Event Emitter ---------
-    function emitToFlutter(eventType, payload = {}) {
-      console.log(`[Flutter Event] Type: ${eventType}, Payload:`, payload);
-      if (window.flutter_inappwebview?.callHandler) {
-        window.flutter_inappwebview.callHandler('playerEvent', { type: eventType, ...payload })
-          .catch(e => console.error("Error calling flutter_inappwebview handler:", e));
+    // --- Communication with Flutter ---
+    function emitToFlutter(handlerName, data) {
+      if (window.flutter_inappwebview && typeof window.flutter_inappwebview.callHandler === 'function') {
+        window.flutter_inappwebview.callHandler(handlerName, data)
+          .then(result => console.log(`Flutter handled ${handlerName}:`, result))
+          .catch(err => console.error(`Error calling Flutter handler ${handlerName}:`, err));
       } else {
-        // Fallback for debugging in browser without Flutter
-        // window.dispatchEvent(new CustomEvent('playerEvent', { detail: { type: eventType, ...payload }}));
+        console.log(`Flutter bridge not available. Event: ${handlerName}`, data);
       }
     }
 
-    // --------- Socket.IO Helper ---------
-    function socketAck(event, payload) {
-      return new Promise((resolve, reject) => {
-        if (!socket || !socket.connected) {
-          return reject(new Error("Socket not connected"));
-        }
-        socket.emit(event, payload, (response) => {
-          if (response?.error) {
-            console.error(`Socket ACK error for '${event}':`, response.error);
-            reject(new Error(response.error));
+    // --- Player Logic ---
+    let socket; // Define socket globally in this script
+    let device, recvTransport;
+    const mediaStream = new MediaStream(); // Keep this if you still build the stream manually
+    let videoConsumer = null, audioConsumer = null;
+    let currentChannelId = null;
+    let viewerCount = 0;
+
+    function updateStatus(message, type = 'info') {
+      statusOverlayEl.textContent = message;
+      if (type === 'live') statusOverlayEl.style.backgroundColor = 'red';
+      else if (type === 'error') statusOverlayEl.style.backgroundColor = 'darkred';
+      else statusOverlayEl.style.backgroundColor = 'rgba(0,0,0,0.7)';
+      emitToFlutter('playerStatus', { message, type });
+    }
+
+    function attachTrack(kind, track){
+      // ... (same as your working version)
+      if (kind === 'video') {
+        const old = mediaStream.getVideoTracks()[0];
+        if (old) mediaStream.removeTrack(old);
+        mediaStream.addTrack(track);
+      } else {
+        const old = mediaStream.getAudioTracks()[0];
+        if (old) mediaStream.removeTrack(old);
+        mediaStream.addTrack(track);
+      }
+      if (!remoteVideoEl.srcObject) remoteVideoEl.srcObject = mediaStream;
+       
+      // Monitor resolution changes if it's a video track
+      if (kind === 'video' && track) {
+          // A short delay to ensure the track is active and settings are available
+          setTimeout(() => {
+              const settings = track.getSettings();
+              if (settings.width && settings.height) {
+                  emitToFlutter('videoResolutionChanged', { width: settings.width, height: settings.height });
+              }
+          }, 1000); // Adjust delay if needed
+      }
+    }
+
+    async function loadDevice(){
+      const caps = await new Promise(res => socket.emit('getRtpCapabilities', res));
+      device = new mediasoupClient.Device();
+      await device.load({ routerRtpCapabilities: caps });
+      console.log("Mediasoup device loaded");
+    }
+
+    async function makeRecvTransport(channelIdForTransport) { // Pass channelId explicitly
+      const params = await new Promise(res => socket.emit('createRecvTransport', { channelId: channelIdForTransport }, res));
+      if (params?.error) throw new Error(`CreateRecvTransport Error: ${params.error}`);
+      const t = device.createRecvTransport(params);
+      t.on('connect', ({ dtlsParameters }, callback, errback) => {
+        socket.emit('connectRecvTransport', { channelId: channelIdForTransport, dtlsParameters }, (r) => {
+          if (r === 'ok') {
+            console.log("RecvTransport connected");
+            callback();
           } else {
-            resolve(response);
+            console.error("RecvTransport connection failed from server");
+            errback(new Error('connectRecvTransport failed from server'));
           }
         });
       });
+      // Listen for 'producerresume' and 'producerpause' on the transport if needed
+      return t;
     }
 
-    // --------- Mediasoup Core Logic ---------
-    function attachTrackToVideoElement(kind, track) {
-      if (!track) return;
-      const existingTracks = kind === 'video' ? mediaStream.getVideoTracks() : mediaStream.getAudioTracks();
-      existingTracks.forEach(t => mediaStream.removeTrack(t));
-      mediaStream.addTrack(track);
-
-      if (!remoteVideo.srcObject) {
-        remoteVideo.srcObject = mediaStream;
-      }
-      remoteVideo.play().catch(e => console.warn("Video play() failed:", e)); // Autoplay might be blocked
-      if (kind === 'video') {
-        remoteVideo.style.display = 'block'; // Show video element
-      }
-    }
-
-    async function initializeMediasoupDevice() {
-      updateStatus('Loading device capabilities...');
-      const routerRtpCapabilities = await socketAck('getRtpCapabilities');
-      device = new mediasoupClient.Device();
-      await device.load({ routerRtpCapabilities });
-      if (!device.loaded) throw new Error("Failed to load mediasoup device.");
-      console.log("Mediasoup device loaded.");
-    }
-
-    async function createRecvTransport() {
-      updateStatus(`Creating transport for channel ${config.channelId}...`);
-      const transportParams = await socketAck('createRecvTransport', { channelId: config.channelId });
-      recvTransport = device.createRecvTransport(transportParams);
-
-      recvTransport.on('connect', ({ dtlsParameters }, callback, errback) => {
-        console.log("RecvTransport: 'connect' event");
-        socketAck('connectRecvTransport', { channelId: config.channelId, dtlsParameters })
-          .then(callback)
-          .catch(errback);
-      });
-
-      recvTransport.on('connectionstatechange', (state) => {
-        console.log(`RecvTransport: connection state change: ${state}`);
-        emitToFlutter('transportState', { state });
-        if (state === 'failed' || state === 'closed' || state === 'disconnected') {
-          updateStatus(`Stream disconnected: ${state}`, 'error');
-          // Consider attempting to reconnect or clean up
-        }
-        if (state === 'connected' && videoConsumer) { // If we have a video consumer and transport connects
-             updateStatus('LIVE', 'live');
-        }
-      });
-      console.log("Receiving transport created.");
-    }
-
-    async function consumeStream(kind) {
-      if (!device.canProduce(kind) && kind === 'video') { // Check if router can even send this kind
-          console.warn(`Router cannot produce '${kind}', skipping consumption.`);
-          return null;
-      }
-      updateStatus(`Consuming ${kind} stream...`);
-      const consumerParams = await socketAck('consume', {
-        channelId: config.channelId,
-        rtpCapabilities: device.rtpCapabilities,
-        kind,
-      }).catch(e => {
-        console.warn(`Could not get consumer params for ${kind}:`, e.message);
-        return null; // Don't throw, allow audio to proceed if video fails, etc.
-      });
-
-      if (!consumerParams) {
-        console.warn(`No consumer parameters received for ${kind}. Broadcaster might not be sending ${kind}.`);
-        if (kind === 'video') updateStatus(`Waiting for ${kind} stream...`, 'waiting');
+    async function consumeKind(kind, channelIdToConsume) { // Pass channelId explicitly
+      updateStatus(`Consuming ${kind}...`, 'info');
+      const data = await new Promise(res => socket.emit('consume', { channelId: channelIdToConsume, rtpCapabilities: device.rtpCapabilities, kind }, res));
+      if (data?.error) {
+        console.warn(`Cannot consume ${kind}: ${data.error}`);
+        if (kind === 'video') updateStatus('Waiting for broadcaster…', 'waiting');
         return null;
       }
-
-      const consumer = await recvTransport.consume(consumerParams);
-      attachTrackToVideoElement(kind, consumer.track);
-      await socketAck('resume', { consumerId: consumer.id });
-      console.log(`${kind} consumer created and resumed.`);
+      const consumer = await recvTransport.consume(data);
+      console.log(`${kind} consumer created:`, consumer.id);
+      attachTrack(kind, consumer.track);
+      await new Promise(res => socket.emit('resume', { consumerId: consumer.id }, res));
+      console.log(`${kind} consumer resumed:`, consumer.id);
       return consumer;
     }
 
-    function startStatsReporting() {
-        if (currentStatsTimer) clearInterval(currentStatsTimer);
-        let lastBytes = 0, lastTs = 0;
+    async function startWatch(channelId, host) {
+      if (!channelId) {
+        updateStatus('No channel selected', 'error');
+        return;
+      }
+      if (socket && socket.connected && currentChannelId === channelId) {
+        console.log("Already connected to this channel.");
+        return;
+      }
+      if (socket && socket.connected && currentChannelId !== channelId) {
+          // If connected to a different channel, disconnect first
+          // This is a simplified disconnect; a full cleanup might be needed
+          console.log(`Switching from ${currentChannelId} to ${channelId}`);
+          socket.emit('leave', {channelId: currentChannelId }); // Assuming a 'leave' event
+          if (recvTransport) {
+              recvTransport.close();
+              recvTransport = null;
+          }
+          if(videoConsumer) { videoConsumer.close(); videoConsumer = null; }
+          if(audioConsumer) { audioConsumer.close(); audioConsumer = null; }
+          // Potentially socket.disconnect() if the host might also change or for a cleaner switch
+      }
+      currentChannelId = channelId; // Set current channel
 
-        currentStatsTimer = setInterval(async () => {
-            if (!videoConsumer || videoConsumer.closed) {
-                // emitToFlutter('network', { kbps: 0, plr: 0 }); // Optionally send zero stats
+      try {
+        updateStatus(`Connecting to ${channelId}...`, 'info');
+
+        if (!socket || !socket.connected) {
+            console.log(`Connecting Socket.IO to host: ${host}`);
+            // Use the host provided by Flutter for Socket.IO connection
+            socket = io(host, {
+                transports: ['websocket', 'polling'],
+                timeout: 10000, // 10 seconds
+            });
+            setupSocketListeners(); // Setup general listeners once
+        }
+
+
+        // Wait for socket to be connected if it was just created
+        if (!socket.connected) {
+            await new Promise((resolve, reject) => {
+                socket.once('connect', resolve);
+                socket.once('connect_error', (err) => reject(new Error(`Socket connection error: ${err.message}`)));
+                // No need to call socket.connect() explicitly, io() does this.
+            });
+        }
+        console.log("Socket.IO connected. ID:", socket.id);
+        emitToFlutter('socketState', { connected: true, id: socket.id });
+
+
+        updateStatus(`Joining ${channelId}...`, 'info');
+        await new Promise(res => socket.emit('join', { channelId }, res)); // Use currentChannelId
+        console.log("Joined channel:", currentChannelId);
+        emitToFlutter('channelJoined', { channelId: currentChannelId });
+
+        if (!device || !device.loaded) { // Ensure device is loaded
+            await loadDevice();
+        }
+        
+        recvTransport = await makeRecvTransport(currentChannelId);
+        videoConsumer = await consumeKind('video', currentChannelId);
+        audioConsumer = await consumeKind('audio', currentChannelId);
+
+        if (videoConsumer) {
+          updateStatus('LIVE', 'live');
+          emitToFlutter('streamState', { live: true, hasVideo: true, hasAudio: !!audioConsumer });
+        } else if (audioConsumer) {
+          updateStatus('Audio Only', 'live');
+          emitToFlutter('streamState', { live: true, hasVideo: false, hasAudio: true });
+        } else {
+          updateStatus(`Waiting for content on ${currentChannelId}...`, 'waiting');
+          emitToFlutter('streamState', { live: false });
+        }
+
+      } catch (e) {
+        console.error("Error during watch:", e);
+        updateStatus(`Error: ${e.message || 'unknown'}`, 'error');
+        emitToFlutter('playerError', { context: 'watch', message: e.message, stack: e.stack });
+      }
+    }
+    
+    function setupSocketListeners() {
+        if (!socket) return;
+
+        // Reconsume on new producer
+        socket.on('newProducer', async ({ channelId: cid, kind }) => {
+            if (cid !== currentChannelId || !device || !recvTransport || !device.loaded) {
+                console.log("Skipping newProducer event: wrong channel, device not ready, or transport not ready.");
                 return;
             }
             try {
-                const stats = await videoConsumer.getStats();
-                let bytes = 0, ts = 0, frameWidth = 0, frameHeight = 0, packetsLost = 0, packetsReceived = 0;
-
-                stats.forEach(s => {
-                    if (s.type === 'inbound-rtp' && s.kind === 'video' && !s.isRemote) {
-                        bytes = s.bytesReceived || bytes;
-                        ts = s.timestamp || ts;
-                        packetsLost = s.packetsLost || packetsLost;
-                        packetsReceived = s.packetsReceived || packetsReceived;
-                        if (typeof s.frameWidth === 'number') frameWidth = s.frameWidth;
-                        if (typeof s.frameHeight === 'number') frameHeight = s.frameHeight;
-                    }
-                    if (s.type === 'track' && s.kind === 'video') { // Fallback for resolution
-                        if (typeof s.frameWidth === 'number' && !frameWidth) frameWidth = s.frameWidth;
-                        if (typeof s.frameHeight === 'number' && !frameHeight) frameHeight = s.frameHeight;
-                    }
-                });
-
-                if (frameHeight) emitToFlutter('resolution', { height: frameHeight, width: frameWidth });
-
-                if (ts && lastTs && bytes >= lastBytes && (packetsReceived + packetsLost) > 0) {
-                    const kbps = ((bytes - lastBytes) * 8) / ((ts - lastTs) / 1000) / 1000;
-                    const plr = (packetsLost / (packetsReceived + packetsLost)) * 100;
-                    emitToFlutter('network', { kbps: Math.round(kbps), plr: +plr.toFixed(2) });
+                console.log(`New ${kind} producer detected for channel ${cid}. Reconsuming.`);
+                // Close existing consumer for this kind if it exists
+                if (kind === 'video' && videoConsumer) {
+                    videoConsumer.close();
+                    videoConsumer = null;
+                } else if (kind === 'audio' && audioConsumer) {
+                    audioConsumer.close();
+                    audioConsumer = null;
                 }
-                lastBytes = bytes; lastTs = ts;
-            } catch (e) {
-                console.warn("Error getting video consumer stats:", e);
-                // emitToFlutter('network', { kbps: 0, plr: 0 }); // Optionally send zero stats
-            }
-        }, 3000); // Report stats every 3 seconds
-    }
 
-
-    async function startStreaming() {
-      if (isPlayerInitialized) {
-        console.warn("Player already initialized. Call PlayerBridge.disconnect() first if you want to re-init.");
-        return;
-      }
-      isPlayerInitialized = true; // Set flag early to prevent re-entry
-
-      try {
-        updateStatus('Connecting to signaling server...');
-        socket = window.io(config.host, {
-          transports: ['websocket', 'polling'],
-          timeout: config.socketIoTimeout,
-          // forceNew: true, // Useful if you need to ensure a fresh connection on re-init
+                const newConsumer = await consumeKind(kind, currentChannelId); // Use currentChannelId
+                if (newConsumer) {
+                    if (kind === 'video') videoConsumer = newConsumer;
+                    else audioConsumer = newConsumer;
+                    updateStatus('LIVE', 'live'); // Or more specific status
+                    emitToFlutter('streamState', { live: true, hasVideo: !!videoConsumer, hasAudio: !!audioConsumer });
+                }
+            } catch (e) { console.error(`Error reconsuming ${kind}:`, e); }
         });
 
-        socket.on('connect', async () => {
-          console.log("Socket.IO connected. ID:", socket.id);
-          emitToFlutter('socketState', { connected: true, id: socket.id });
-          updateStatus('Socket connected. Joining channel...');
-
-          try {
-            const joinResponse = await socketAck('join', { channelId: config.channelId });
-            console.log("Joined channel:", config.channelId, "Response:", joinResponse);
-            emitToFlutter('channelJoined', { channelId: config.channelId });
-
-            await initializeMediasoupDevice();
-            await createRecvTransport();
-
-            // Attempt to consume video first, then audio
-            videoConsumer = await consumeStream('video');
-            audioConsumer = await consumeStream('audio'); // Will proceed even if videoConsumer is null
-
-            if (videoConsumer) {
-              updateStatus('LIVE', 'live');
-              emitToFlutter('streamState', { live: true, hasVideo: true, hasAudio: !!audioConsumer });
-              startStatsReporting();
-              remoteVideo.muted = false; // Unmute if video starts (ensure user gesture if needed for some browsers)
-            } else if (audioConsumer) {
-              updateStatus('Audio Only', 'live'); // Or some other status
-              emitToFlutter('streamState', { live: true, hasVideo: false, hasAudio: true });
-               remoteVideo.muted = false;
+        socket.on('producerClosed', ({ channelId: cid, kind, producerId }) => {
+            if (cid !== currentChannelId) return;
+            console.log(`${kind} producer ${producerId} closed.`);
+            if (kind === 'video' && videoConsumer && videoConsumer.producerId === producerId) {
+                videoConsumer.close();
+                videoConsumer = null;
+                console.log("Video consumer closed.");
+            } else if (kind === 'audio' && audioConsumer && audioConsumer.producerId === producerId) {
+                audioConsumer.close();
+                audioConsumer = null;
+                console.log("Audio consumer closed.");
             }
-            else {
-              updateStatus(`Waiting for content on ${config.channelId}...`, 'waiting');
-              emitToFlutter('streamState', { live: false });
+            if (!videoConsumer && !audioConsumer) {
+                updateStatus(`Stream ended on ${currentChannelId}. Waiting...`, 'waiting');
+                emitToFlutter('streamState', { live: false });
+            } else if (!videoConsumer && audioConsumer) {
+                 updateStatus('Audio Only', 'live');
+                 emitToFlutter('streamState', { live: true, hasVideo: false, hasAudio: true });
             }
-          } catch (err) {
-            console.error("Error during post-socket-connect setup:", err);
-            updateStatus(`Stream Setup Error: ${err.message}`, 'error');
-            emitToFlutter('error', { context: 'streamSetup', message: err.message });
-            disconnectGracefully(); // Clean up on critical setup error
-          }
+            // else: video might still be there if only audio closed, or vice-versa
+        });
+
+        socket.on('viewerCount', ({ count }) => {
+            viewerCount = count;
+            console.log("Viewer count:", count);
+            emitToFlutter('viewerCountChanged', { count });
+        });
+        
+        socket.on('disconnect', (reason) => {
+            console.log("Socket.IO disconnected. Reason:", reason);
+            updateStatus(`Disconnected: ${reason}`, 'info');
+            emitToFlutter('socketState', { connected: false, reason: reason });
+            // Cleanup state
+            if (recvTransport) { recvTransport.close(); recvTransport = null; }
+            if (videoConsumer) { videoConsumer.close(); videoConsumer = null; }
+            if (audioConsumer) { audioConsumer.close(); audioConsumer = null; }
+            // Don't nullify device, it can be reused.
+            // currentChannelId = null; // Or keep it if you intend to reconnect to the same
         });
 
         socket.on('connect_error', (err) => {
-          console.error("Socket.IO connection error:", err);
-          updateStatus(`Socket Error: ${err.message}`, 'error');
-          emitToFlutter('socketState', { connected: false, error: err.message });
-          isPlayerInitialized = false; // Allow re-init
+            console.error("Socket.IO connection error:", err);
+            updateStatus(`Socket Error: ${err.message}`, 'error');
+            emitToFlutter('socketState', { connected: false, error: err.message });
         });
-
-        socket.on('disconnect', (reason) => {
-          console.log("Socket.IO disconnected. Reason:", reason);
-          updateStatus(`Disconnected: ${reason}`, 'info');
-          emitToFlutter('socketState', { connected: false, reason });
-          cleanupPlayerState(); // Clean up consumers, transports
-          isPlayerInitialized = false; // Allow re-init
-        });
-
-        socket.on('newProducer', async ({ channelId: incomingChannelId, kind }) => {
-          if (incomingChannelId !== config.channelId || !recvTransport || recvTransport.closed) return;
-          console.log(`New producer of kind '${kind}' detected for current channel.`);
-          emitToFlutter('newProducer', { kind });
-          try {
-            if (kind === 'video' && !videoConsumer) {
-              videoConsumer = await consumeStream('video');
-              if (videoConsumer) {
-                 updateStatus('LIVE', 'live');
-                 emitToFlutter('streamState', { live: true, hasVideo: true });
-                 startStatsReporting();
-                 remoteVideo.muted = false;
-              }
-            } else if (kind === 'audio' && !audioConsumer) {
-              audioConsumer = await consumeStream('audio');
-               if (audioConsumer && videoConsumer) emitToFlutter('streamState', { hasAudio: true });
-               else if (audioConsumer) updateStatus('Audio Only', 'live'); remoteVideo.muted = false; // If only audio starts
-            }
-          } catch (e) {
-            console.error(`Error consuming new producer for ${kind}:`, e);
-          }
-        });
-
-        socket.on('producerClosed', ({ channelId: incomingChannelId, kind, producerId }) => {
-            if (incomingChannelId !== config.channelId) return;
-            console.log(`Producer of kind '${kind}' (ID: ${producerId}) closed.`);
-            emitToFlutter('producerClosed', { kind, producerId });
-            if (kind === 'video' && videoConsumer && videoConsumer.producerId === producerId) {
-                videoConsumer.close(); videoConsumer = null;
-                const videoTracks = mediaStream.getVideoTracks();
-                videoTracks.forEach(track => { track.stop(); mediaStream.removeTrack(track); });
-                if (!audioConsumer) { // If audio also gone or was never there
-                    remoteVideo.style.display = 'none';
-                    updateStatus(`Waiting for content on ${config.channelId}...`, 'waiting');
-                    emitToFlutter('streamState', { live: false, hasVideo: false});
-                } else {
-                    emitToFlutter('streamState', { hasVideo: false }); // Still has audio
-                }
-            } else if (kind === 'audio' && audioConsumer && audioConsumer.producerId === producerId) {
-                audioConsumer.close(); audioConsumer = null;
-                const audioTracks = mediaStream.getAudioTracks();
-                audioTracks.forEach(track => { track.stop(); mediaStream.removeTrack(track); });
-                 emitToFlutter('streamState', { hasAudio: false });
-                 if (!videoConsumer) { // If video also gone or was never there
-                    remoteVideo.style.display = 'none';
-                    updateStatus(`Waiting for content on ${config.channelId}...`, 'waiting');
-                    emitToFlutter('streamState', { live: false });
-                 }
-            }
-            if (!videoConsumer && !audioConsumer) { // If both are gone
-                 remoteVideo.srcObject = null; // Clear srcObject if no tracks left
-            }
-        });
-
-
-        socket.on('viewerCount', ({ count }) => {
-            emitToFlutter('viewerCount', { count });
-        });
-
-
-      } catch (error) {
-        console.error("Fatal error initializing player:", error);
-        updateStatus(`Fatal Error: ${error.message}`, 'error');
-        emitToFlutter('error', { context: 'initialization', message: error.message });
-        isPlayerInitialized = false; // Allow re-init
-      }
     }
 
-    function cleanupPlayerState() {
-        console.log("Cleaning up player state...");
-        if (currentStatsTimer) clearInterval(currentStatsTimer); currentStatsTimer = null;
 
-        [videoConsumer, audioConsumer].forEach(consumer => {
-            if (consumer && !consumer.closed) {
-                try { consumer.close(); } catch (e) { console.warn("Error closing consumer:", e); }
-            }
-        });
-        videoConsumer = null; audioConsumer = null;
-
-        if (recvTransport && !recvTransport.closed) {
-            try { recvTransport.close(); } catch (e) { console.warn("Error closing recvTransport:", e); }
-        }
-        recvTransport = null;
-
-        if (device) {
-            // device object itself doesn't have a close/dispose method in mediasoup-client v3
-        }
-        device = null; // Allow it to be garbage collected
-
-        if (mediaStream) {
-            mediaStream.getTracks().forEach(track => track.stop());
-            // mediaStream = new MediaStream(); // Re-create for next session if needed, or clear tracks
-        }
-        if(remoteVideo) remoteVideo.srcObject = null; remoteVideo.style.display = 'none';
-        isPlayerInitialized = false;
-    }
-
-    function disconnectGracefully() {
-        cleanupPlayerState();
-        if (socket) {
-            socket.disconnect();
-        }
-        socket = null; // Allow it to be GC'd
-        console.log("Disconnected gracefully.");
-        updateStatus('Disconnected', 'info');
-    }
-
-    // --------- Public PlayerBridge API ---------
-    window.PlayerBridge = {
+    // --- Functions callable from Flutter ---
+    window.playerBridge = {
       init: (options) => {
-        console.log("[PlayerBridge] init called with options:", options);
-        if (isPlayerInitialized) {
-            const msg = "Player is already initialized or in the process. Call disconnect() first.";
-            console.warn(`[PlayerBridge] ${msg}`);
-            emitToFlutter('warning', { context: 'init', message: msg });
-            return Promise.reject(new Error(msg)); // Or resolve if you want to allow benign re-init
+        console.log("[PlayerBridge] init called by Flutter with:", options);
+        if (!options || !options.channelId || !options.host) {
+          const errMsg = "PlayerBridge.init requires 'channelId' and 'host'.";
+          console.error(errMsg);
+          updateStatus(errMsg, 'error');
+          emitToFlutter('playerError', { context: 'init', message: errMsg });
+          return Promise.reject(new Error(errMsg)); // Return a rejected promise
         }
+        // Store config for potential reconnects if needed, though startWatch now takes host
+        // window.playerConfig = options; 
 
-        if (!options?.host || !options?.channelId) {
-          updateStatus('Error: Missing host or channelId in init options.', 'error');
-          emitToFlutter('error', { context: 'init', message: 'Missing host or channelId' });
-          return Promise.reject(new Error('Host and ChannelId are required.'));
-        }
-
-        config.host = options.host.startsWith('http') ? options.host : `https://${options.host}`; // Assume https if no scheme
-        config.host = config.host.replace(/\/$/, ''); // Remove trailing slash
-        config.channelId = options.channelId;
-
-        if (config.validChannelIds && config.validChannelIds.length > 0 && !config.validChannelIds.includes(config.channelId)) {
-            const errorMsg = `Invalid channelId: ${config.channelId}. Valid are: ${config.validChannelIds.join(', ')}`;
-            updateStatus(errorMsg, 'error');
-            emitToFlutter('error', { context: 'init', message: errorMsg });
-            return Promise.reject(new Error(errorMsg));
-        }
-        
-        // Mute video by default, unmute on successful stream start with video
-        remoteVideo.muted = true; 
-
-        // Return a promise that resolves/rejects based on connection outcome
+        // Return a promise that resolves/rejects based on startWatch outcome
         return new Promise((resolve, reject) => {
-            const tempSuccessListener = () => {
-                socket.off('connect', tempSuccessListener);
-                socket.off('connect_error', tempErrorListener);
-                resolve({ status: "Socket connected, proceeding with stream setup." });
-            };
-            const tempErrorListener = (err) => {
-                socket.off('connect', tempSuccessListener);
-                socket.off('connect_error', tempErrorListener);
-                isPlayerInitialized = false; // Reset on initial connection failure
-                reject(new Error(`Socket connection failed: ${err.message}`));
-            };
-            socket.once('connect', tempSuccessListener);
-            socket.once('connect_error', tempErrorListener);
-
-            startStreaming().catch(err => { // Catch errors from startStreaming itself
-                 socket.off('connect', tempSuccessListener);
-                 socket.off('connect_error', tempErrorListener);
-                 isPlayerInitialized = false; // Reset
-                 reject(err);
-            });
+            startWatch(options.channelId, options.host)
+                .then(() => {
+                    console.log("[PlayerBridge] startWatch completed successfully for init.");
+                    resolve({ status: "Player initialized and attempting to stream." });
+                })
+                .catch(err => {
+                    console.error("[PlayerBridge] startWatch failed during init:", err);
+                    reject(err); // The error from startWatch will be passed up
+                });
         });
-
       },
-
-      setQuality: async (level /* 'low'|'med'|'high'|'auto' */) => {
-        if (!socket || !socket.connected || !videoConsumer || videoConsumer.closed) {
-          console.warn("[PlayerBridge] setQuality: Not connected or no video consumer.");
-          return;
-        }
-        if (level === 'auto') {
-            console.log("[PlayerBridge] setQuality: WebRTC adaptive quality is generally 'auto' by default.");
-            return; // Mediasoup typically handles this adaptively unless server forces layers
-        }
-        const layerMap = { low: 0, med: 1, high: 2 }; // Example mapping
-        const spatialLayer = layerMap[level];
-        if (typeof spatialLayer !== 'number') {
-            console.warn(`[PlayerBridge] setQuality: Invalid level '${level}'`);
-            return;
-        }
-        try {
-          console.log(`[PlayerBridge] Setting preferred spatial layer to: ${spatialLayer}`);
-          await socketAck('setPreferredLayers', { channelId: config.channelId, spatialLayer, temporalLayer: 2 }); // Example temporal layer
-          emitToFlutter('qualitySet', { level, spatialLayer });
-        } catch (e) {
-          console.error("[PlayerBridge] Error setting preferred layers:", e);
-          emitToFlutter('error', { context: 'setQuality', message: e.message });
-        }
-      },
-
       disconnect: () => {
-        console.log("[PlayerBridge] disconnect called.");
-        disconnectGracefully();
-        emitToFlutter('disconnected');
-      },
-
-      reconnect: () => {
-        console.log("[PlayerBridge] reconnect called.");
-        if (isPlayerInitialized) {
-            console.warn("[PlayerBridge] Player is already initialized. Disconnecting first.");
-            disconnectGracefully();
+        console.log("[PlayerBridge] disconnect called by Flutter");
+        if (socket && socket.connected) {
+          socket.disconnect(); // This will trigger the 'disconnect' event listener for cleanup
         }
-        if (config.host && config.channelId) {
-            updateStatus('Reconnecting...', 'info');
-            return window.PlayerBridge.init({ host: config.host, channelId: config.channelId });
-        } else {
-            const msg = "Cannot reconnect: Host or ChannelId not previously set.";
-            console.error(`[PlayerBridge] ${msg}`);
-            updateStatus(msg, 'error');
-            return Promise.reject(new Error(msg));
-        }
+        // Explicitly clear some state, though 'disconnect' listener should also do it
+        if (recvTransport) { recvTransport.close(); recvTransport = null; }
+        if (videoConsumer) { videoConsumer.close(); videoConsumer = null; }
+        if (audioConsumer) { audioConsumer.close(); audioConsumer = null; }
+        currentChannelId = null;
+        updateStatus('Disconnected by app', 'info');
+        emitToFlutter('streamState', { live: false });
+        return Promise.resolve({ status: "Disconnect initiated." });
       },
-
-      toggleAudio: () => {
-        if (remoteVideo) {
-            remoteVideo.muted = !remoteVideo.muted;
-            console.log(`[PlayerBridge] Audio ${remoteVideo.muted ? 'muted' : 'unmuted'}`);
-            emitToFlutter('audioState', { muted: remoteVideo.muted });
-        }
-      },
-      
       enterFullscreen: () => {
-        if (remoteVideo && remoteVideo.requestFullscreen) {
-            remoteVideo.requestFullscreen().catch(e => console.warn("Fullscreen request failed:", e));
-        } else if (remoteVideo && remoteVideo.webkitEnterFullscreen) { // iOS
-            remoteVideo.webkitEnterFullscreen();
+        console.log("[PlayerBridge] enterFullscreen called by Flutter");
+        if (remoteVideoEl.requestFullscreen) {
+          remoteVideoEl.requestFullscreen().catch(err => console.error("Error entering fullscreen:", err));
+        } else if (remoteVideoEl.webkitRequestFullscreen) { /* Safari */
+          remoteVideoEl.webkitRequestFullscreen().catch(err => console.error("Error entering fullscreen (webkit):", err));
+        } else if (remoteVideoEl.msRequestFullscreen) { /* IE11 */
+          remoteVideoEl.msRequestFullscreen().catch(err => console.error("Error entering fullscreen (ms):", err));
         }
-      }
+        return Promise.resolve({ status: "Fullscreen request sent." });
+      },
+      exitFullscreen: () => {
+        console.log("[PlayerBridge] exitFullscreen called by Flutter");
+        if (document.exitFullscreen) {
+          document.exitFullscreen().catch(err => console.error("Error exiting fullscreen:", err));
+        } else if (document.webkitExitFullscreen) { /* Safari */
+          document.webkitExitFullscreen().catch(err => console.error("Error exiting fullscreen (webkit):", err));
+        } else if (document.msExitFullscreen) { /* IE11 */
+          document.msExitFullscreen().catch(err => console.error("Error exiting fullscreen (ms):", err));
+        }
+        return Promise.resolve({ status: "Exit fullscreen request sent." });
+      },
+      getVideoResolution: () => {
+        console.log("[PlayerBridge] getVideoResolution called by Flutter");
+        if (videoConsumer && videoConsumer.track && videoConsumer.track.readyState === 'live') {
+          const settings = videoConsumer.track.getSettings();
+          if (settings.width && settings.height) {
+            return Promise.resolve({ width: settings.width, height: settings.height });
+          }
+        }
+        return Promise.resolve({ width: 0, height: 0, message: "Video track not available or no resolution data." });
+      },
+      // Example: Mute/Unmute (if you want to control from Flutter)
+      // setMuted: (muted) => {
+      //   console.log(`[PlayerBridge] setMuted called by Flutter: ${muted}`);
+      //   remoteVideoEl.muted = muted;
+      //   return Promise.resolve({ muted: remoteVideoEl.muted });
+      // }
     };
 
-    // Optional: Handle standalone mode via URL parameters (for direct browser testing)
-    document.addEventListener('DOMContentLoaded', () => {
-      const urlParams = new URLSearchParams(window.location.search);
-      const autoHost = urlParams.get('host') || window.location.origin; // Default to current origin if no host
-      const autoChannel = urlParams.get('ch');
+    // --- Event Listeners for Video Element ---
+    remoteVideoEl.onloadedmetadata = () => {
+      console.log("Video metadata loaded. Dimensions:", remoteVideoEl.videoWidth, remoteVideoEl.videoHeight);
+      emitToFlutter('videoResolutionChanged', { width: remoteVideoEl.videoWidth, height: remoteVideoEl.videoHeight });
+    };
 
-      if (autoChannel) {
-        console.log(`[Standalone Mode] Autostarting with host: ${autoHost}, channel: ${autoChannel}`);
-        updateStatus(`Connecting to ${autoChannel}...`, 'info');
-        window.PlayerBridge.init({ host: autoHost, channelId: autoChannel })
-          .then(() => console.log("[Standalone Mode] Player init successful."))
-          .catch(err => {
-            console.error("[Standalone Mode] Player init failed:", err);
-            updateStatus(`Error: ${err.message}`, 'error');
-          });
-      } else {
-        updateStatus('Ready. Waiting for init from host app.', 'info');
-      }
-    });
+    remoteVideoEl.onresize = () => { // This event fires when the video's intrinsic size changes
+      console.log("Video resized. Dimensions:", remoteVideoEl.videoWidth, remoteVideoEl.videoHeight);
+      emitToFlutter('videoResolutionChanged', { width: remoteVideoEl.videoWidth, height: remoteVideoEl.videoHeight });
+    };
+    
+    // Listen for browser fullscreen changes
+    document.addEventListener('fullscreenchange', () => emitToFlutter('fullscreenChanged', { isFullscreen: !!document.fullscreenElement }));
+    document.addEventListener('webkitfullscreenchange', () => emitToFlutter('fullscreenChanged', { isFullscreen: !!document.webkitFullscreenElement })); // Safari
+
+
+    // Remove initial auto-watch if Flutter will call init
+    // const initialChannelId = new URLSearchParams(location.search).get('ch');
+    // const initialHost = new URLSearchParams(location.search).get('host') || location.origin; // Default to current origin if no host param
+    // if (initialChannelId) {
+    //   console.log(`Initial auto-watch for channel: ${initialChannelId} on host: ${initialHost}`);
+    //   startWatch(initialChannelId, initialHost);
+    // } else {
+    //   updateStatus('Ready. Waiting for init.', 'info');
+    // }
+    updateStatus('Player Ready. Waiting for init from app.', 'info');
+
 
   </script>
 </body>

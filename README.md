@@ -80,15 +80,6 @@ pm2 start server.js
 
 ---
 
-## 🖼️ Screenshots  
-- **Home Page**  
-- **Broadcaster Panel**  
-- **Viewer Page with Quality Selector**  
-
-*(add screenshots here later if needed)*  
-
----
-
 ## 📖 Notes  
 - Works best over **HTTPS** (for camera/mic access).  
 - Mediasoup requires a proper **public IP** for external access.  
