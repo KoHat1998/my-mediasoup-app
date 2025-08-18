@@ -2,7 +2,7 @@
 import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
 const el = (id) => document.getElementById(id);
-const toast = (t) => { const x = el('toast'); x.textContent = t; x.style.display='block'; setTimeout(()=>x.style.display='none', 1800); };
+const toast = (t) => { const x = el('toast'); if (!x) return alert(t); x.textContent = t; x.style.display='block'; setTimeout(()=>x.style.display='none', 1800); };
 const setBadge = (on) => { const b = el('liveBadge'); b.textContent = on ? 'LIVE' : 'OFFLINE'; b.className = 'badge ' + (on ? 'live' : ''); };
 
 // --- Channel: enforce ?ch=b1|b2 and set page title
@@ -18,6 +18,14 @@ document.title = (CHANNEL_ID === 'b1' ? 'Broadcaster 1' : 'Broadcaster 2') + ' �
 const socket = io();
 let device, sendTransport, currentStream = null, videoProducer = null, audioProducer = null;
 let startedAt = 0, upTimer = null;
+
+// --- Camera switch state
+let currentFacing = 'user';         // 'user' | 'environment'
+let currentDeviceId = null;         // active camera's deviceId if we can detect it
+
+// Optional controls (exist if you added them to HTML)
+const btnFlip = el('btnFlip');
+const cameraSelect = el('cameraSelect');
 
 // --- UI helpers
 function skeleton(show){
@@ -82,6 +90,91 @@ async function produceOrReplace(kind, track) {
   }
 }
 
+// ---------- Camera enumeration & switching ----------
+async function populateCameras() {
+  if (!cameraSelect) return;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter(d => d.kind === 'videoinput');
+    cameraSelect.innerHTML = '';
+    cams.forEach((d, i) => {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = d.label || `Camera ${i+1}`;
+      cameraSelect.appendChild(opt);
+    });
+    cameraSelect.style.display = cams.length > 1 ? 'inline-block' : 'none';
+    if (currentDeviceId) {
+      for (const o of cameraSelect.options) o.selected = (o.value === currentDeviceId);
+    }
+  } catch (e) {
+    cameraSelect.style.display = 'none';
+  }
+}
+
+/**
+ * Start/restart the camera with given constraints but keep the stream live by replaceTrack.
+ * - Keeps the existing audio track if we already captured mic.
+ */
+async function startWithConstraints(constraints) {
+  // stop only current video track (keep audio if already present)
+  try { currentStream?.getVideoTracks().forEach(t => t.stop()); } catch {}
+
+  const camStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+  // Merge previous audio if needed (some browsers won't include audio when using facingMode/deviceId)
+  if (currentStream) {
+    const prevAudio = currentStream.getAudioTracks()[0];
+    if (prevAudio && !camStream.getAudioTracks().length) camStream.addTrack(prevAudio);
+  }
+
+  // show preview
+  el('local').srcObject = camStream;
+  await el('local').play?.().catch(()=>{});
+  skeleton(false);
+
+  // attach to existing producer
+  const newV = camStream.getVideoTracks()[0] || null;
+  if (newV) {
+    await loadDevice();
+    await ensureSendTransport();
+    await produceOrReplace('video', newV);
+  }
+
+  // remember new current stream and active device id if available
+  if (currentStream && currentStream !== camStream) stopStream(currentStream);
+  currentStream = camStream;
+
+  try {
+    const settings = newV?.getSettings?.() || {};
+    currentDeviceId = settings.deviceId || currentDeviceId;
+  } catch {}
+
+  await populateCameras();
+}
+
+// Flip between front/back using facingMode (best UX on mobile)
+async function flipCamera() {
+  currentFacing = (currentFacing === 'user') ? 'environment' : 'user';
+  const tries = [
+    { video: { facingMode: { exact: currentFacing } }, audio: true },
+    { video: { facingMode: currentFacing }, audio: true },
+    { video: true, audio: true } // fallback
+  ];
+  for (const c of tries) {
+    try { await startWithConstraints(c); toast('Camera switched'); return; } catch {}
+  }
+  toast('Could not switch camera on this device');
+}
+
+// Switch by explicit deviceId from the dropdown
+async function selectCamera(deviceId) {
+  if (!deviceId) return;
+  currentDeviceId = deviceId;
+  await startWithConstraints({ video: { deviceId: { exact: deviceId } }, audio: true });
+  toast('Camera selected');
+}
+
 // --- Swap between camera/screen sources while keeping the same producers
 async function swapToStream(stream, label){
   el('local').srcObject = stream;
@@ -103,6 +196,18 @@ async function swapToStream(stream, label){
   // ✅ Clear loading state and update status consistently
   skeleton(false);
   el('status').textContent = (label === 'screen') ? '🖥️ Live (Screen)' : '📷 Live (Camera)';
+
+  // update device list after permission (labels become available)
+  try {
+    if (label !== 'screen') {
+      const settings = v?.getSettings?.() || {};
+      currentDeviceId = settings.deviceId || currentDeviceId;
+      await populateCameras();
+    } else if (cameraSelect) {
+      // hide camera dropdown during screen share
+      cameraSelect.style.display = 'none';
+    }
+  } catch {}
   toast(label === 'screen' ? 'Screen sharing started' : 'Camera live');
 }
 
@@ -111,7 +216,9 @@ async function goLiveWithCamera(){
   el('status').textContent = 'Requesting camera/mic…';
   skeleton(true);
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    // Default to front camera. Change to 'environment' if you prefer back camera by default.
+    currentFacing = 'user';
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacing }, audio: true });
     await swapToStream(stream, 'camera');
   } catch (e) {
     el('status').textContent = 'Failed: ' + (e?.message || e) + ' (HTTPS needed)';
@@ -124,7 +231,7 @@ async function shareScreen(){
   el('status').textContent = 'Requesting screen…';
   skeleton(true);
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
     const t = stream.getVideoTracks()[0];
     if (t) t.onended = async () => { toast('Screen share ended'); try { await goLiveWithCamera(); } catch {} };
     await swapToStream(stream, 'screen');
@@ -152,6 +259,9 @@ function stopBroadcast(){
   // ✅ final state
   el('status').textContent = 'Stream stopped';
   toast('Stream stopped');
+
+  // reveal camera dropdown again for next start
+  if (cameraSelect) cameraSelect.style.display = 'none';
 }
 
 function toggleMic(){
@@ -185,3 +295,10 @@ el('stop').onclick = () => stopBroadcast();
 el('toggleMic').onclick = () => toggleMic();
 el('toggleCam').onclick = () => toggleCam();
 el('end').onclick = () => stopBroadcast();
+
+// New: camera controls (if present in HTML)
+if (btnFlip) btnFlip.onclick = () => flipCamera().catch(console.error);
+if (cameraSelect) cameraSelect.onchange = (e) => selectCamera(e.target.value);
+
+// --- Optional: expose debug helpers in console
+window._dbg = { flipCamera, selectCamera, startWithConstraints };
