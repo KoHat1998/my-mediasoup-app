@@ -33,16 +33,27 @@ app.use(express.urlencoded({ extended: false })); // for login POST
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// Simple cookie helpers (no new deps)
+// -------- Helpers (cookies / proto) --------
 function parseCookie(header = '') {
   return Object.fromEntries(
     header.split(';').map(v => v.trim().split('=').map(decodeURIComponent)).filter(kv => kv[0])
   );
 }
-function setCookie(res, name, value) {
-  // 2h session cookie (Secure assumes HTTPS), adjust to your needs
-  const cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=7200`;
-  res.setHeader('Set-Cookie', cookie);
+function isHttps(req) {
+  // honor reverse proxy headers
+  return (req.headers['x-forwarded-proto'] || '').toLowerCase() === 'https' || req.secure;
+}
+function setCookie(req, res, name, value) {
+  // 2h session cookie; Secure only when HTTPS (so local HTTP dev still works)
+  const parts = [
+    `${encodeURIComponent(name)}=${encodeURIComponent(value)}`,
+    'HttpOnly',
+    'SameSite=Lax',
+    'Path=/',
+    'Max-Age=7200'
+  ];
+  if (isHttps(req)) parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
 }
 
 // -------- Mediasoup core --------
@@ -113,7 +124,7 @@ app.post('/login', (req, res) => {
     return res.redirect('/login?err=1');
   }
   const channelId = entry.username; // 'b1' or 'b2'
-  setCookie(res, 'host', channelId);
+  setCookie(req, res, 'host', channelId);
   return res.redirect(`/broadcaster.html?ch=${channelId}`);
 });
 
@@ -121,16 +132,39 @@ app.post('/login', (req, res) => {
 app.get('/broadcaster.html', (req, res) => {
   const cookies = parseCookie(req.headers.cookie || '');
   const host = cookies.host;
-  const url = new URL(`${req.protocol}://${req.headers.host}${req.url}`);
+
+  // Build URL with proxy-aware proto
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol);
+  const url = new URL(`${proto}://${req.headers.host}${req.url}`);
   const ch = url.searchParams.get('ch');
 
-  if (!host || !CHANNEL_IDS.includes(host)) return res.redirect('/login');
-  if (!ch || ch !== host) return res.redirect(`/broadcaster.html?ch=${host}`); // force your own channel
+  if (!host || !CHANNEL_IDS.includes(host)) {
+    return res.redirect('/login');
+  }
+  if (!ch || ch !== host) {
+    // force your own channel if someone tries the other one
+    return res.redirect(`/broadcaster.html?ch=${host}`);
+  }
+
+  // never cache protected page
+  res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(__dirname, 'public', 'broadcaster.html'));
 });
 
-// Everyone else static
-app.use(express.static('public'));
+// Guard: if someone tries to fetch the raw file under /public (e.g. via proxy misconfig), deny it.
+app.get(['/public/broadcaster.html', '/public/broadcaster'], (_req, res) => {
+  return res.status(404).send('Not found');
+});
+
+// Everyone else static (after protected routes)
+app.use(express.static('public', {
+  setHeaders(res, filepath) {
+    if (filepath.endsWith(path.sep + 'broadcaster.html')) {
+      // belt & suspenders: do not cache even if served through our guarded route
+      res.setHeader('Cache-Control', 'no-store');
+    }
+  }
+}));
 
 // ---------- Socket.IO ----------
 io.on('connection', (socket) => {
@@ -191,7 +225,7 @@ io.on('connection', (socket) => {
       transport.on('close', () => {
         try {
           const state = channels.get(ch);
-          if (state) {
+        if (state) {
             state.videoProducer = null;
             state.audioProducer = null;
           }
