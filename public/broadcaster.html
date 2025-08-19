@@ -10,8 +10,14 @@
   <header class="header">
     <a href="/" class="brand">🎥 KoHat Live</a>
     <div class="actions">
+      <!-- Login for first-time; guarded route will still require it -->
       <a class="btn big" href="/login">Start Broadcasting</a>
       <a class="btn big ghost" href="/viewer.html">Watch Live</a>
+
+      <!-- New: logout (releases single-session lock) -->
+      <form method="post" action="/logout" style="display:inline">
+        <button class="btn ghost" type="submit" title="End session for this broadcaster">Logout</button>
+      </form>
     </div>
   </header>
 
@@ -36,9 +42,9 @@
         <button id="toggleCam" class="btn ghost">Disable Cam</button>
         <button id="end" class="btn ghost">End Stream</button>
 
-        <!-- New: mobile camera controls -->
-        <button id="btnFlip" class="btn">Flip Camera</button>
-        <select id="cameraSelect" class="btn" style="display:none; max-width:240px;"></select>
+        <!-- New: mobile / multi-cam controls -->
+        <button id="btnFlip" class="btn" title="Toggle front/back camera (mobile)">Flip Camera</button>
+        <select id="cameraSelect" class="btn" style="display:none; max-width:260px;" title="Pick a specific camera"></select>
       </div>
 
       <p id="status" style="margin-top:8px; opacity:.85; text-align:center"></p>
@@ -59,6 +65,7 @@
   <script src="/socket.io/socket.io.js"></script>
   <script type="module" src="/broadcaster.js"></script>
 
+  <!-- Tiny helper to show which channel this page controls -->
   <script>
     (function(){
       const q = new URLSearchParams(location.search).get('ch');

@@ -107,7 +107,7 @@ async function populateCameras() {
     if (currentDeviceId) {
       for (const o of cameraSelect.options) o.selected = (o.value === currentDeviceId);
     }
-  } catch (e) {
+  } catch {
     cameraSelect.style.display = 'none';
   }
 }

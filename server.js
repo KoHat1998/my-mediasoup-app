@@ -4,6 +4,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const mediasoup = require('mediasoup');
+const { randomUUID } = require('crypto');
 
 // -------- Config --------
 const PORT = process.env.PORT || 3000;
@@ -11,6 +12,9 @@ const PORT = process.env.PORT || 3000;
 const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '13.210.150.18';
 const WEBRTC_MIN_PORT = 40000;
 const WEBRTC_MAX_PORT = 49999;
+
+// TTL for broadcaster session (seconds). Default 2h.
+const HOST_SESSION_TTL = parseInt(process.env.HOST_SESSION_TTL || '7200', 10);
 
 // Admin accounts (env recommended)
 const ACCOUNTS = {
@@ -33,27 +37,63 @@ app.use(express.urlencoded({ extended: false })); // for login POST
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// -------- Helpers (cookies / proto) --------
+// -------- Session book-keeping: single active session per channel --------
+/**
+ * activeSessions[channelId] = {
+ *   sid: 'uuid',
+ *   expiresAt: ms since epoch
+ * }
+ */
+const activeSessions = Object.create(null);
+
+// -------- Helpers (cookies / proto / session) --------
 function parseCookie(header = '') {
   return Object.fromEntries(
     header.split(';').map(v => v.trim().split('=').map(decodeURIComponent)).filter(kv => kv[0])
   );
 }
 function isHttps(req) {
-  // honor reverse proxy headers
   return (req.headers['x-forwarded-proto'] || '').toLowerCase() === 'https' || req.secure;
 }
-function setCookie(req, res, name, value) {
-  // 2h session cookie; Secure only when HTTPS (so local HTTP dev still works)
+function setCookie(req, res, name, value, maxAgeSec = HOST_SESSION_TTL) {
   const parts = [
     `${encodeURIComponent(name)}=${encodeURIComponent(value)}`,
     'HttpOnly',
     'SameSite=Lax',
     'Path=/',
-    'Max-Age=7200'
+    `Max-Age=${Math.max(0, maxAgeSec|0)}`
   ];
   if (isHttps(req)) parts.push('Secure');
-  res.setHeader('Set-Cookie', parts.join('; '));
+  res.append('Set-Cookie', parts.join('; '));
+}
+function clearCookie(req, res, name) {
+  const parts = [
+    `${encodeURIComponent(name)}=`,
+    'HttpOnly',
+    'SameSite=Lax',
+    'Path=/',
+    'Max-Age=0'
+  ];
+  if (isHttps(req)) parts.push('Secure');
+  res.append('Set-Cookie', parts.join('; '));
+}
+function now() { return Date.now(); }
+function notExpired(entry) { return entry && entry.expiresAt > now(); }
+function refreshSession(channelId) {
+  const e = activeSessions[channelId];
+  if (e) e.expiresAt = now() + HOST_SESSION_TTL * 1000;
+}
+function validateHostCookies(req) {
+  const cookies = parseCookie(req.headers.cookie || '');
+  const host = cookies.host;
+  const sid = cookies.sid;
+  if (!host || !sid) return null;
+  const entry = activeSessions[host];
+  if (!notExpired(entry)) return null;
+  if (entry.sid !== sid) return null;
+  // sliding expiration
+  refreshSession(host);
+  return { host, sid };
 }
 
 // -------- Mediasoup core --------
@@ -116,51 +156,67 @@ app.get('/login', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
 
-// Login submit
+// Login submit — SINGLE ACTIVE SESSION PER CHANNEL
 app.post('/login', (req, res) => {
   const { username, password } = req.body || {};
   const entry = Object.values(ACCOUNTS).find(a => a.username === username);
   if (!entry || password !== entry.password) {
     return res.redirect('/login?err=1');
   }
+
   const channelId = entry.username; // 'b1' or 'b2'
-  setCookie(req, res, 'host', channelId);
+  const current = activeSessions[channelId];
+
+  // If session exists and not expired, block new login
+  if (notExpired(current)) {
+    return res.redirect('/login?err=busy'); // already in use
+  }
+
+  // Issue a fresh session
+  const sid = randomUUID();
+  activeSessions[channelId] = { sid, expiresAt: now() + HOST_SESSION_TTL * 1000 };
+
+  setCookie(req, res, 'host', channelId, HOST_SESSION_TTL);
+  setCookie(req, res, 'sid', sid, HOST_SESSION_TTL);
   return res.redirect(`/broadcaster.html?ch=${channelId}`);
 });
 
-// Protect the broadcaster page (must have host cookie and it must match ?ch=)
-app.get('/broadcaster.html', (req, res) => {
+// Logout — clears cookies and releases the lock if owner
+app.post('/logout', (req, res) => {
   const cookies = parseCookie(req.headers.cookie || '');
   const host = cookies.host;
+  const sid = cookies.sid;
+  if (host && sid && activeSessions[host]?.sid === sid) {
+    delete activeSessions[host];
+  }
+  clearCookie(req, res, 'host');
+  clearCookie(req, res, 'sid');
+  res.redirect('/login?ok=1');
+});
 
-  // Build URL with proxy-aware proto
+// Protect the broadcaster page (must present valid host+sid and match ?ch=)
+app.get('/broadcaster.html', (req, res) => {
+  const valid = validateHostCookies(req);
   const proto = (req.headers['x-forwarded-proto'] || req.protocol);
   const url = new URL(`${proto}://${req.headers.host}${req.url}`);
   const ch = url.searchParams.get('ch');
 
-  if (!host || !CHANNEL_IDS.includes(host)) {
-    return res.redirect('/login');
-  }
-  if (!ch || ch !== host) {
-    // force your own channel if someone tries the other one
-    return res.redirect(`/broadcaster.html?ch=${host}`);
-  }
+  if (!valid) return res.redirect('/login');
+  if (!ch || ch !== valid.host) return res.redirect(`/broadcaster.html?ch=${valid.host}`);
 
-  // never cache protected page
   res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(__dirname, 'public', 'broadcaster.html'));
 });
 
-// Guard: if someone tries to fetch the raw file under /public (e.g. via proxy misconfig), deny it.
+// Belt & suspenders: never allow fetching this file directly via "/public/..."
 app.get(['/public/broadcaster.html', '/public/broadcaster'], (_req, res) => {
   return res.status(404).send('Not found');
 });
 
-// Everyone else static (after protected routes)
+// Everyone else static
 app.use(express.static('public', {
   setHeaders(res, filepath) {
     if (filepath.endsWith(path.sep + 'broadcaster.html')) {
-      // belt & suspenders: do not cache even if served through our guarded route
       res.setHeader('Cache-Control', 'no-store');
     }
   }
@@ -177,15 +233,22 @@ io.on('connection', (socket) => {
     const cid = payload?.channelId;
     return CHANNEL_IDS.includes(cid) ? cid : null;
   }
-  // For producers: check the cookie host === channelId
+
+  // STRONG producer auth: cookie host+sid must match active session
   function assertIsChannelHost(channelId) {
     const cookies = parseCookie(socket.request.headers.cookie || '');
     const host = cookies.host;
+    const sid = cookies.sid;
+    const entry = activeSessions[host];
     if (!host || host !== channelId) throw new Error('not authorized for this channel');
+    if (!entry || entry.sid !== sid || !notExpired(entry)) throw new Error('invalid or expired session');
+    // sliding refresh on socket activity
+    refreshSession(host);
   }
 
   /**
    * Tag sockets when they join to indicate if they are the host for that channel.
+   * (Used for viewerCount)
    */
   socket.on('join', ({ channelId } = {}, cb) => {
     const ch = getChannelIdFromPayload({ channelId });
@@ -193,7 +256,12 @@ io.on('connection', (socket) => {
 
     try {
       const cookies = parseCookie(socket.request.headers.cookie || '');
-      socket.data.isHostFor = (cookies.host === ch) ? ch : null;
+      const host = cookies.host;
+      const sid = cookies.sid;
+      const entry = activeSessions[host];
+      const isValidHost = !!(host === ch && entry && entry.sid === sid && notExpired(entry));
+      socket.data.isHostFor = isValidHost ? ch : null;
+      if (isValidHost) refreshSession(host);
     } catch {
       socket.data.isHostFor = null;
     }
@@ -221,14 +289,10 @@ io.on('connection', (socket) => {
       const transport = await createWebRtcTransport();
       socket.data[`sendTransport_${ch}`] = transport;
 
-      // If the transport dies, clear producers for this channel
       transport.on('close', () => {
         try {
           const state = channels.get(ch);
-        if (state) {
-            state.videoProducer = null;
-            state.audioProducer = null;
-          }
+          if (state) { state.videoProducer = null; state.audioProducer = null; }
         } catch {}
       });
 
@@ -268,7 +332,6 @@ io.on('connection', (socket) => {
       const producer = await t.produce({ kind, rtpParameters });
       const state = channels.get(ch);
 
-      // replace existing producer of same kind
       if (kind === 'video') {
         try { await state.videoProducer?.close(); } catch {}
         state.videoProducer = producer;
@@ -280,22 +343,15 @@ io.on('connection', (socket) => {
       }
 
       producer.on('transportclose', () => {
-        console.log(`[${ch}] ${kind} producer transport closed`);
-        // ensure state is cleared so future consume doesn't use stale id
         try {
           const s = channels.get(ch);
-          if (!s) return;
-          if (kind === 'video') s.videoProducer = null;
-          else s.audioProducer = null;
+          if (s) { if (kind === 'video') s.videoProducer = null; else s.audioProducer = null; }
         } catch {}
       });
       producer.on('close', () => {
-        console.log(`[${ch}] ${kind} producer closed`);
         try {
           const s = channels.get(ch);
-          if (!s) return;
-          if (kind === 'video') s.videoProducer = null;
-          else s.audioProducer = null;
+          if (s) { if (kind === 'video') s.videoProducer = null; else s.audioProducer = null; }
         } catch {}
       });
 
@@ -410,7 +466,6 @@ io.on('connection', (socket) => {
     for (const ch of CHANNEL_IDS) {
       try { socket.data[`sendTransport_${ch}`]?.close(); } catch {}
       try { socket.data[`recvTransport_${ch}`]?.close(); } catch {}
-      // ensure viewer count updates if this socket was in any room
       broadcastViewerCount(ch);
     }
     const list = consumers.get(socket.id) || [];

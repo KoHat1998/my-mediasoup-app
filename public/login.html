@@ -23,7 +23,7 @@
       <form method="post" action="/login"
             style="margin-top:12px; display:flex; flex-direction:column; gap:10px; align-items:center"
             autocomplete="off">
-        <input name="username" placeholder="b1 or b2" required
+        <input id="username" name="username" placeholder="b1 or b2" required
                inputmode="text" autocapitalize="none" spellcheck="false"
                style="padding:12px; border-radius:12px; border:1px solid rgba(255,255,255,.25); width:260px; background:rgba(0,0,0,.2); color:#fff">
         <input name="password" type="password" placeholder="password" required
@@ -32,12 +32,40 @@
         <button class="btn big" type="submit">Login</button>
       </form>
 
-      <!-- Simple error message if /login?err=1 -->
-      <p id="err" style="color:#fca5a5; margin-top:8px; min-height:1.2em"></p>
+      <!-- Status / error messages -->
+      <p id="msg" style="margin-top:8px; min-height:1.2em"></p>
       <script>
-        if (new URLSearchParams(location.search).get('err')) {
-          document.getElementById('err').textContent = 'Invalid username or password';
-        }
+        (function () {
+          const p = new URLSearchParams(location.search);
+          const msg = document.getElementById('msg');
+          const usernameEl = document.getElementById('username');
+
+          // Pre-fill username if ?ch=b1|b2 provided
+          const ch = p.get('ch');
+          if (ch === 'b1' || ch === 'b2') usernameEl.value = ch;
+
+          // Messages
+          const err = p.get('err');
+          const ok = p.get('ok');
+          const bye = p.get('bye');
+
+          let text = '';
+          let color = '#fca5a5'; // red-ish for errors by default
+
+          if (err === '1') {
+            text = 'Invalid username or password.';
+          } else if (err === 'busy') {
+            text = 'This broadcaster is already signed in. Please try again later or ask them to log out.';
+          } else if (err === 'expired') {
+            text = 'Your session expired. Please sign in again.';
+          } else if (ok === '1' || bye === '1') {
+            text = 'You have been logged out.';
+            color = '#a7f3d0'; // green-ish for success
+          }
+
+          msg.textContent = text;
+          msg.style.color = color;
+        })();
       </script>
     </section>
   </main>
