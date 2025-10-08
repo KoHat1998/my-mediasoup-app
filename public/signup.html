@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sign up · KoHat Live</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <a href="/" class="brand">🎥 KoHat Live</a>
+    <div class="actions">
+      <a class="btn ghost" href="/signin.html">Already have an account?</a>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main class="main" style="max-width:620px;margin:0 auto">
+    <section class="card" style="padding:24px">
+      <h1 style="margin:0 0 6px">Create your account</h1>
+      <p class="small" style="opacity:.9;margin:0 0 16px">
+        Sign up to watch lives and start streaming.
+      </p>
+
+      <form id="f" autocomplete="on">
+        <label class="label">Name (optional)</label>
+        <input class="input" type="text" name="name" placeholder="Your display name" />
+
+        <label class="label" style="margin-top:12px">Email</label>
+        <input class="input" type="email" name="email" placeholder="you@example.com" required />
+
+        <label class="label" style="margin-top:12px">Password</label>
+        <input class="input" type="password" name="password" minlength="6" required />
+
+        <label class="label" style="margin-top:12px">Confirm Password</label>
+        <input class="input" type="password" name="confirm_password" minlength="6" required />
+
+        <div style="display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap">
+          <button id="submitBtn" class="btn" type="submit">Create account</button>
+          <span id="msg" class="small" style="opacity:.9"></span>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <small>© 2025 KoHat Live</small>
+    <nav>
+      <a href="#">Terms</a>
+      <a href="#">Privacy</a>
+      <a href="#">Contact</a>
+    </nav>
+  </footer>
+
+  <script>
+  // Call your friend's API directly (CORS now enabled)
+  const API_REGISTER = 'https://livenix.duckdns.org/api/register';
+
+  const form = document.getElementById('f');
+  const msg  = document.getElementById('msg');
+  const btn  = document.getElementById('submitBtn');
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    msg.textContent = '';
+    msg.style.color = '';
+    btn.disabled = true;
+
+    const body = Object.fromEntries(new FormData(form));
+
+    // client-side password match
+    if (body.password !== body.confirm_password) {
+      msg.textContent = "❌ Passwords don't match.";
+      msg.style.color = 'red';
+      btn.disabled = false;
+      return;
+    }
+
+    try {
+      const res = await fetch(API_REGISTER, {
+        method: 'POST',
+        // IMPORTANT for Laravel: Accept JSON to avoid 302 redirect to web routes
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          name: body.name || '',
+          email: body.email,
+          password: body.password,
+          // support both common field names
+          confirm_password: body.confirm_password,
+          password_confirmation: body.confirm_password
+        }),
+        // optional but explicit
+        mode: 'cors',
+        redirect: 'follow'
+      });
+
+      let data = {};
+      try { data = await res.json(); } catch {}
+
+      if (!res.ok) {
+        // Laravel may return validation errors in different shapes
+        const firstError =
+          data.message ||
+          (data.errors && Object.values(data.errors)[0]?.[0]) ||
+          'Sign up failed';
+        msg.textContent = `❌ ${firstError}`;
+        msg.style.color = 'red';
+        btn.disabled = false;
+        return;
+      }
+
+      msg.textContent = '✅ Account created! Redirecting…';
+      msg.style.color = 'green';
+      setTimeout(() => location.href = '/signin.html', 1200);
+    } catch (err) {
+      msg.textContent = 'Network error. Please try again.';
+      msg.style.color = 'red';
+      btn.disabled = false;
+    }
+  };
+</script>
+</body>
+</html>

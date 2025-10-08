@@ -12,10 +12,9 @@
   "license": "ISC",
   "dependencies": {
     "express": "^5.1.0",
-    "mediasoup": "^3.18.0",
+    "mediasoup": "^3.19.3",
     "socket.io": "^4.8.1"
   },
-  "devDependencies": {},
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KoHat1998/my-mediasoup-app.git"

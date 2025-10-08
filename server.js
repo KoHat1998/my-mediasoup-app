@@ -1,4 +1,5 @@
-// server.js
+// server.js — KoHat Live (multi-room, auth-required; CORS-enabled direct auth)
+
 const path = require('path');
 const express = require('express');
 const http = require('http');
@@ -6,112 +7,43 @@ const { Server } = require('socket.io');
 const mediasoup = require('mediasoup');
 const { randomUUID } = require('crypto');
 
-// -------- Config --------
+// ---------------- Config ----------------
 const PORT = process.env.PORT || 3000;
-// IMPORTANT: set to your EC2 public/elastic IP (or pass ANNOUNCED_IP via env for PM2)
 const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '13.210.150.18';
-const WEBRTC_MIN_PORT = 40000;
-const WEBRTC_MAX_PORT = 49999;
+const WEBRTC_MIN_PORT = parseInt(process.env.WEBRTC_MIN_PORT || '40000', 10);
+const WEBRTC_MAX_PORT = parseInt(process.env.WEBRTC_MAX_PORT || '49999', 10);
+const TEST_AUTH_BYPASS = String(process.env.TEST_AUTH_BYPASS || '').toLowerCase() === 'true';
 
-// TTL for broadcaster session (seconds). Default 2h.
-const HOST_SESSION_TTL = parseInt(process.env.HOST_SESSION_TTL || '7200', 10);
-
-// Admin accounts (env recommended)
-const ACCOUNTS = {
-  b1: {
-    username: process.env.B1_USER || 'b1',
-    password: process.env.B1_PASSWORD || 'changeme1',
-    label: 'Broadcaster 1',
-  },
-  b2: {
-    username: process.env.B2_USER || 'b2',
-    password: process.env.B2_PASSWORD || 'changeme2',
-    label: 'Broadcaster 2',
-  }
-};
-
-// -------- App / Socket --------
+// ---------------- App / Socket ----------------
 const app = express();
-app.use(express.urlencoded({ extended: false })); // for login POST
-// serve static *after* special routes (so we can protect /broadcaster.html)
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+const io = new Server(server, {
+  cors: {
+    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  },
+});
 
-// -------- Session book-keeping: single active session per channel --------
-/**
- * activeSessions[channelId] = {
- *   sid: 'uuid',
- *   expiresAt: ms since epoch
- * }
- */
-const activeSessions = Object.create(null);
-
-// -------- Helpers (cookies / proto / session) --------
-function parseCookie(header = '') {
-  return Object.fromEntries(
-    header.split(';').map(v => v.trim().split('=').map(decodeURIComponent)).filter(kv => kv[0])
-  );
-}
-function isHttps(req) {
-  return (req.headers['x-forwarded-proto'] || '').toLowerCase() === 'https' || req.secure;
-}
-function setCookie(req, res, name, value, maxAgeSec = HOST_SESSION_TTL) {
-  const parts = [
-    `${encodeURIComponent(name)}=${encodeURIComponent(value)}`,
-    'HttpOnly',
-    'SameSite=Lax',
-    'Path=/',
-    `Max-Age=${Math.max(0, maxAgeSec|0)}`
-  ];
-  if (isHttps(req)) parts.push('Secure');
-  res.append('Set-Cookie', parts.join('; '));
-}
-function clearCookie(req, res, name) {
-  const parts = [
-    `${encodeURIComponent(name)}=`,
-    'HttpOnly',
-    'SameSite=Lax',
-    'Path=/',
-    'Max-Age=0'
-  ];
-  if (isHttps(req)) parts.push('Secure');
-  res.append('Set-Cookie', parts.join('; '));
-}
-function now() { return Date.now(); }
-function notExpired(entry) { return entry && entry.expiresAt > now(); }
-function refreshSession(channelId) {
-  const e = activeSessions[channelId];
-  if (e) e.expiresAt = now() + HOST_SESSION_TTL * 1000;
-}
-function validateHostCookies(req) {
-  const cookies = parseCookie(req.headers.cookie || '');
-  const host = cookies.host;
-  const sid = cookies.sid;
-  if (!host || !sid) return null;
-  const entry = activeSessions[host];
-  if (!notExpired(entry)) return null;
-  if (entry.sid !== sid) return null;
-  // sliding expiration
-  refreshSession(host);
-  return { host, sid };
-}
-
-// -------- Mediasoup core --------
+// ---------------- Mediasoup core ----------------
 let worker, router;
 const mediaCodecs = [
   { kind: 'audio', mimeType: 'audio/opus', clockRate: 48000, channels: 2 },
   { kind: 'video', mimeType: 'video/VP8', clockRate: 90000 },
-  { kind: 'video', mimeType: 'video/H264', clockRate: 90000,
-    parameters: { 'level-asymmetry-allowed': 1, 'packetization-mode': 1, 'profile-level-id': '42e01f' } }
+  {
+    kind: 'video',
+    mimeType: 'video/H264',
+    clockRate: 90000,
+    parameters: {
+      'level-asymmetry-allowed': 1,
+      'packetization-mode': 1,
+      'profile-level-id': '42e01f',
+    },
+  },
 ];
-
-// Per-channel state
-const CHANNEL_IDS = ['b1', 'b2'];
-const channels = new Map(); // id -> { videoProducer, audioProducer }
-for (const id of CHANNEL_IDS) channels.set(id, { videoProducer: null, audioProducer: null });
-
-const consumers = new Map(); // socket.id -> Consumer[]
-function roomName(id) { return `ch:${id}`; }
 
 (async () => {
   worker = await mediasoup.createWorker({ rtcMinPort: WEBRTC_MIN_PORT, rtcMaxPort: WEBRTC_MAX_PORT });
@@ -122,362 +54,311 @@ function roomName(id) { return `ch:${id}`; }
   router = await worker.createRouter({ mediaCodecs });
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server listening on http://0.0.0.0:${PORT}`);
-    console.log(`ANNOUNCED_IP = ${ANNOUNCED_IP}`);
+    console.log(`✅ Server listening on http://0.0.0.0:${PORT}`);
+    console.log(`🌐 ANNOUNCED_IP = ${ANNOUNCED_IP}`);
+    if (TEST_AUTH_BYPASS) console.log('⚠️ TEST_AUTH_BYPASS is ON — all requests are auto-authorized.');
   });
 })();
 
 async function createWebRtcTransport() {
   return router.createWebRtcTransport({
     listenIps: [{ ip: '0.0.0.0', announcedIp: ANNOUNCED_IP }],
-    enableUdp: true, enableTcp: true, preferUdp: true
+    enableUdp: true,
+    enableTcp: true,
+    preferUdp: true,
   });
 }
 
-/**
- * Broadcast viewer count excluding any host socket(s).
- */
-function broadcastViewerCount(channelId) {
-  const rn = roomName(channelId);
+// ---------------- Lives store (in-memory) ----------------
+const lives = new Map(); // id -> live
+
+function makeSlug(title = 'live') {
+  const base = String(title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 40) || 'live';
+  return `${base}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function findLiveBySlug(slug) {
+  return Array.from(lives.values()).find((l) => l.slug === slug) || null;
+}
+
+function ensureLiveState(liveId) {
+  const live = lives.get(liveId);
+  if (!live) return null;
+  if (!live.state) {
+    live.state = {
+      transports: new Map(),
+      videoProducer: null,
+      audioProducer: null,
+      roomName: `live:${liveId}`,
+      consumersBySocket: new Map(),
+      videoConsumerBySocket: new Map(),
+    };
+  }
+  return live.state;
+}
+
+function broadcastViewers(liveId) {
+  const live = lives.get(liveId);
+  if (!live || !live.state) return;
+  const rn = live.state.roomName;
   const members = io.sockets.adapter.rooms.get(rn) || new Set();
-
-  let count = 0;
-  for (const sid of members) {
-    const s = io.sockets.sockets.get(sid);
-    if (!s?.data?.isHostFor || s.data.isHostFor !== channelId) count++;
-  }
-  io.to(rn).emit('viewerCount', { count });
+  io.to(rn).emit('viewers', members.size);
 }
 
-// --------- Auth pages / routes ---------
+// ---------------- Auth Helper ----------------
+function requireAuthHeader(req, res, next) {
+  if (TEST_AUTH_BYPASS) {
+    req.user = { token: 'fake', raw: 'Bearer fake' };
+    return next();
+  }
+  const h = req.headers.authorization || '';
+  if (!/^Bearer\s+/i.test(h)) return res.status(401).json({ error: 'Missing Authorization: Bearer <token>' });
+  req.user = { token: h.trim().replace(/^Bearer\s+/i, ''), raw: h };
+  next();
+}
 
-// Login page
-app.get('/login', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+// ---------------- REST: Lives ----------------
+app.post('/api/lives', requireAuthHeader, (req, res) => {
+  const { title, description } = req.body || {};
+  const id = randomUUID();
+  const slug = makeSlug(title || 'live');
+  const live = {
+    id,
+    slug,
+    title: title || 'Untitled Live',
+    description: description || null,
+    hostUserId: 'token:' + (req.user.token || '').slice(0, 12),
+    isLive: true,
+    createdAt: new Date().toISOString(),
+    endedAt: null,
+    state: null,
+  };
+  lives.set(id, live);
+  ensureLiveState(id);
+  res.json(live);
 });
 
-// Login submit — SINGLE ACTIVE SESSION PER CHANNEL
-app.post('/login', (req, res) => {
-  const { username, password } = req.body || {};
-  const entry = Object.values(ACCOUNTS).find(a => a.username === username);
-  if (!entry || password !== entry.password) {
-    return res.redirect('/login?err=1');
-  }
-
-  const channelId = entry.username; // 'b1' or 'b2'
-  const current = activeSessions[channelId];
-
-  // If session exists and not expired, block new login
-  if (notExpired(current)) {
-    return res.redirect('/login?err=busy'); // already in use
-  }
-
-  // Issue a fresh session
-  const sid = randomUUID();
-  activeSessions[channelId] = { sid, expiresAt: now() + HOST_SESSION_TTL * 1000 };
-
-  setCookie(req, res, 'host', channelId, HOST_SESSION_TTL);
-  setCookie(req, res, 'sid', sid, HOST_SESSION_TTL);
-  return res.redirect(`/broadcaster.html?ch=${channelId}`);
+app.get('/api/lives', requireAuthHeader, (_req, res) => {
+  const list = Array.from(lives.values())
+    .filter((l) => l.isLive)
+    .map((l) => ({
+      id: l.id,
+      slug: l.slug,
+      title: l.title,
+      description: l.description,
+      createdAt: l.createdAt,
+    }));
+  res.json(list);
 });
 
-// Logout — clears cookies and releases the lock if owner
-app.post('/logout', (req, res) => {
-  const cookies = parseCookie(req.headers.cookie || '');
-  const host = cookies.host;
-  const sid = cookies.sid;
-  if (host && sid && activeSessions[host]?.sid === sid) {
-    delete activeSessions[host];
-  }
-  clearCookie(req, res, 'host');
-  clearCookie(req, res, 'sid');
-  res.redirect('/login?ok=1');
-});
-
-// Protect the broadcaster page (must present valid host+sid and match ?ch=)
-app.get('/broadcaster.html', (req, res) => {
-  const valid = validateHostCookies(req);
-  const proto = (req.headers['x-forwarded-proto'] || req.protocol);
-  const url = new URL(`${proto}://${req.headers.host}${req.url}`);
-  const ch = url.searchParams.get('ch');
-
-  if (!valid) return res.redirect('/login');
-  if (!ch || ch !== valid.host) return res.redirect(`/broadcaster.html?ch=${valid.host}`);
-
-  res.setHeader('Cache-Control', 'no-store');
-  res.sendFile(path.join(__dirname, 'public', 'broadcaster.html'));
-});
-
-// Belt & suspenders: never allow fetching this file directly via "/public/..."
-app.get(['/public/broadcaster.html', '/public/broadcaster'], (_req, res) => {
-  return res.status(404).send('Not found');
-});
-
-// Everyone else static
-app.use(express.static('public', {
-  setHeaders(res, filepath) {
-    if (filepath.endsWith(path.sep + 'broadcaster.html')) {
-      res.setHeader('Cache-Control', 'no-store');
-    }
-  }
-}));
-
-// ---------- Socket.IO ----------
-io.on('connection', (socket) => {
-  // Helper: safe cb
-  const ok = (cb, payload='ok') => { try { (cb||(()=>{}))(payload);} catch(e) { console.error('ack error', e); } };
-  const errAck = (cb, message) => ok(cb, { error: message });
-
-  // Which channel is this user *trying* to act on?
-  function getChannelIdFromPayload(payload) {
-    const cid = payload?.channelId;
-    return CHANNEL_IDS.includes(cid) ? cid : null;
-  }
-
-  // STRONG producer auth: cookie host+sid must match active session
-  function assertIsChannelHost(channelId) {
-    const cookies = parseCookie(socket.request.headers.cookie || '');
-    const host = cookies.host;
-    const sid = cookies.sid;
-    const entry = activeSessions[host];
-    if (!host || host !== channelId) throw new Error('not authorized for this channel');
-    if (!entry || entry.sid !== sid || !notExpired(entry)) throw new Error('invalid or expired session');
-    // sliding refresh on socket activity
-    refreshSession(host);
-  }
-
-  /**
-   * Tag sockets when they join to indicate if they are the host for that channel.
-   * (Used for viewerCount)
-   */
-  socket.on('join', ({ channelId } = {}, cb) => {
-    const ch = getChannelIdFromPayload({ channelId });
-    if (!ch) return errAck(cb, 'invalid channelId');
-
+app.patch('/api/lives/:id/end', requireAuthHeader, (req, res) => {
+  const live = lives.get(req.params.id);
+  if (!live) return res.status(404).json({ error: 'Not found' });
+  live.isLive = false;
+  live.endedAt = new Date().toISOString();
+  if (live.state) {
     try {
-      const cookies = parseCookie(socket.request.headers.cookie || '');
-      const host = cookies.host;
-      const sid = cookies.sid;
-      const entry = activeSessions[host];
-      const isValidHost = !!(host === ch && entry && entry.sid === sid && notExpired(entry));
-      socket.data.isHostFor = isValidHost ? ch : null;
-      if (isValidHost) refreshSession(host);
-    } catch {
-      socket.data.isHostFor = null;
-    }
-
-    socket.join(roomName(ch));
-    broadcastViewerCount(ch);
-    ok(cb);
-  });
-
-  socket.on('leave', ({ channelId } = {}, cb) => {
-    const ch = getChannelIdFromPayload({ channelId });
-    if (!ch) return errAck(cb, 'invalid channelId');
-    socket.leave(roomName(ch));
-    broadcastViewerCount(ch);
-    ok(cb);
-  });
-
-  socket.on('getRtpCapabilities', (cb) => ok(cb, router.rtpCapabilities));
-
-  // ---- Broadcaster (send) ----
-  socket.on('createSendTransport', async ({ channelId } = {}, cb) => {
-    try {
-      const ch = getChannelIdFromPayload({ channelId });
-      assertIsChannelHost(ch);
-      const transport = await createWebRtcTransport();
-      socket.data[`sendTransport_${ch}`] = transport;
-
-      transport.on('close', () => {
+      for (const [, t] of live.state.transports) {
         try {
-          const state = channels.get(ch);
-          if (state) { state.videoProducer = null; state.audioProducer = null; }
+          t.send?.close();
         } catch {}
-      });
+        try {
+          t.recv?.close();
+        } catch {}
+      }
+      try {
+        live.state.videoProducer?.close();
+      } catch {}
+      try {
+        live.state.audioProducer?.close();
+      } catch {}
+    } catch {}
+  }
+  res.json({ ok: true });
+});
 
-      ok(cb, {
-        id: transport.id,
-        iceParameters: transport.iceParameters,
-        iceCandidates: transport.iceCandidates,
-        dtlsParameters: transport.dtlsParameters
-      });
+// ---------------- Static Routes ----------------
+app.get('/healthz', (_req, res) => res.json({ ok: true }));
+app.get('/', (_req, res) => res.redirect('/lives.html'));
+app.use(express.static('public')); // serves /signin.html, /signup.html, etc.
+
+// ---------------- Socket.IO ----------------
+io.use((socket, next) => {
+  const { role, token, liveId, slug } = socket.handshake.auth || {};
+  if (!TEST_AUTH_BYPASS && (!token || !/^Bearer\s+/i.test(token))) {
+    return next(new Error('auth required'));
+  }
+  socket.data.role = role || 'viewer';
+  socket.data.token = token || 'Bearer fake';
+
+  let live = null;
+  if (liveId && lives.has(liveId)) live = lives.get(liveId);
+  if (!live && slug) live = findLiveBySlug(slug);
+  if (!live) return next(new Error('live not found'));
+
+  socket.data.liveId = live.id;
+  socket.data.slug = live.slug;
+  socket.data.isHost = socket.data.role === 'broadcaster';
+  next();
+});
+
+io.on('connection', (socket) => {
+  const liveId = socket.data.liveId;
+  const live = lives.get(liveId);
+  if (!live || !live.isLive) {
+    socket.emit('error', 'Live not available');
+    return socket.disconnect(true);
+  }
+
+  const state = ensureLiveState(liveId);
+  const roomName = state.roomName;
+  socket.join(roomName);
+  broadcastViewers(liveId);
+
+  const ok = (cb, payload = 'ok') => { try { (cb || (() => {}))(payload); } catch (e) { console.error('ack error', e); } };
+  const errAck = (cb, msg) => ok(cb, { error: msg });
+
+  socket.on('getRtpCapabilities', (_payload, cb) => ok(cb, router.rtpCapabilities));
+
+  socket.on('createSendTransport', async (_payload, cb) => {
+    try {
+      if (!socket.data.isHost) return errAck(cb, 'not host');
+      const t = await createWebRtcTransport();
+      state.transports.set(socket.id, { ...(state.transports.get(socket.id) || {}), send: t });
+      ok(cb, { id: t.id, iceParameters: t.iceParameters, iceCandidates: t.iceCandidates, dtlsParameters: t.dtlsParameters });
     } catch (e) {
-      console.error('createSendTransport error', e);
-      errAck(cb, e.message || 'createSendTransport failed');
+      console.error('createSendTransport', e);
+      errAck(cb, 'createSendTransport failed');
     }
   });
 
-  socket.on('connectSendTransport', async ({ channelId, dtlsParameters }, cb) => {
+  socket.on('connectSendTransport', async ({ dtlsParameters }, cb) => {
     try {
-      const ch = getChannelIdFromPayload({ channelId });
-      assertIsChannelHost(ch);
-      const t = socket.data[`sendTransport_${ch}`];
+      if (!socket.data.isHost) return errAck(cb, 'not host');
+      const t = (state.transports.get(socket.id) || {}).send;
       if (!t) return errAck(cb, 'no send transport');
       await t.connect({ dtlsParameters });
       ok(cb);
     } catch (e) {
-      console.error('connectSendTransport error', e);
-      errAck(cb, e.message || 'connectSendTransport failed');
+      console.error('connectSendTransport', e);
+      errAck(cb, 'connectSendTransport failed');
     }
   });
 
-  socket.on('produce', async ({ channelId, kind, rtpParameters }, cb) => {
+  socket.on('produce', async ({ kind, rtpParameters }, cb) => {
     try {
-      const ch = getChannelIdFromPayload({ channelId });
-      assertIsChannelHost(ch);
-      const t = socket.data[`sendTransport_${ch}`];
+      if (!socket.data.isHost) return errAck(cb, 'not host');
+      const t = (state.transports.get(socket.id) || {}).send;
       if (!t) return errAck(cb, 'no send transport');
-
       const producer = await t.produce({ kind, rtpParameters });
-      const state = channels.get(ch);
 
       if (kind === 'video') {
-        try { await state.videoProducer?.close(); } catch {}
+        await state.videoProducer?.close().catch(() => {});
         state.videoProducer = producer;
-        io.to(roomName(ch)).emit('newProducer', { channelId: ch, kind: 'video' });
-      } else if (kind === 'audio') {
-        try { await state.audioProducer?.close(); } catch {}
+        io.to(roomName).emit('newProducer', { kind: 'video', slug: live.slug });
+      } else {
+        await state.audioProducer?.close().catch(() => {});
         state.audioProducer = producer;
-        io.to(roomName(ch)).emit('newProducer', { channelId: ch, kind: 'audio' });
+        io.to(roomName).emit('newProducer', { kind: 'audio', slug: live.slug });
       }
 
-      producer.on('transportclose', () => {
-        try {
-          const s = channels.get(ch);
-          if (s) { if (kind === 'video') s.videoProducer = null; else s.audioProducer = null; }
-        } catch {}
-      });
-      producer.on('close', () => {
-        try {
-          const s = channels.get(ch);
-          if (s) { if (kind === 'video') s.videoProducer = null; else s.audioProducer = null; }
-        } catch {}
-      });
+      producer.on('transportclose', () => { if (kind === 'video') state.videoProducer = null; else state.audioProducer = null; });
+      producer.on('close', () => { if (kind === 'video') state.videoProducer = null; else state.audioProducer = null; });
 
       ok(cb, { id: producer.id });
     } catch (e) {
-      console.error('produce error', e);
-      errAck(cb, e.message || 'produce failed');
+      console.error('produce', e);
+      errAck(cb, 'produce failed');
     }
   });
 
-  // ---- Viewer (recv) ----
-  socket.on('createRecvTransport', async ({ channelId } = {}, cb) => {
+  socket.on('createRecvTransport', async (_payload, cb) => {
     try {
-      const ch = getChannelIdFromPayload({ channelId });
-      if (!ch) return errAck(cb, 'invalid channelId');
-      const transport = await createWebRtcTransport();
-      socket.data[`recvTransport_${ch}`] = transport;
-
-      ok(cb, {
-        id: transport.id,
-        iceParameters: transport.iceParameters,
-        iceCandidates: transport.iceCandidates,
-        dtlsParameters: transport.dtlsParameters
-      });
+      const t = await createWebRtcTransport();
+      state.transports.set(socket.id, { ...(state.transports.get(socket.id) || {}), recv: t });
+      ok(cb, { id: t.id, iceParameters: t.iceParameters, iceCandidates: t.iceCandidates, dtlsParameters: t.dtlsParameters });
     } catch (e) {
-      console.error('createRecvTransport error', e);
-      errAck(cb, e.message || 'createRecvTransport failed');
+      console.error('createRecvTransport', e);
+      errAck(cb, 'createRecvTransport failed');
     }
   });
 
-  socket.on('connectRecvTransport', async ({ channelId, dtlsParameters }, cb) => {
+  socket.on('connectRecvTransport', async ({ dtlsParameters }, cb) => {
     try {
-      const ch = getChannelIdFromPayload({ channelId });
-      if (!ch) return errAck(cb, 'invalid channelId');
-      const t = socket.data[`recvTransport_${ch}`];
+      const t = (state.transports.get(socket.id) || {}).recv;
       if (!t) return errAck(cb, 'no recv transport');
       await t.connect({ dtlsParameters });
       ok(cb);
     } catch (e) {
-      console.error('connectRecvTransport error', e);
-      errAck(cb, e.message || 'connectRecvTransport failed');
+      console.error('connectRecvTransport', e);
+      errAck(cb, 'connectRecvTransport failed');
     }
   });
 
-  socket.on('consume', async ({ channelId, rtpCapabilities, kind }, cb) => {
+  socket.on('consume', async ({ rtpCapabilities, kind }, cb) => {
     try {
-      const ch = getChannelIdFromPayload({ channelId });
-      if (!ch) return errAck(cb, 'invalid channelId');
-      const state = channels.get(ch);
-      const target = (kind === 'video') ? state.videoProducer : state.audioProducer;
-      if (!target) return errAck(cb, `no ${kind} producer`);
-      if (!router.canConsume({ producerId: target.id, rtpCapabilities })) return errAck(cb, 'cannot consume');
-
-      const t = socket.data[`recvTransport_${ch}`];
+      const prod = kind === 'video' ? state.videoProducer : state.audioProducer;
+      if (!prod) return errAck(cb, `no ${kind} producer`);
+      if (!router.canConsume({ producerId: prod.id, rtpCapabilities })) return errAck(cb, 'cannot consume');
+      const t = (state.transports.get(socket.id) || {}).recv;
       if (!t) return errAck(cb, 'no recv transport');
+      const c = await t.consume({ producerId: prod.id, rtpCapabilities, paused: true });
 
-      const consumer = await t.consume({ producerId: target.id, rtpCapabilities, paused: true });
+      const list = state.consumersBySocket.get(socket.id) || [];
+      list.push(c);
+      state.consumersBySocket.set(socket.id, list);
+      if (kind === 'video') state.videoConsumerBySocket.set(socket.id, c);
 
-      const list = consumers.get(socket.id) || [];
-      list.push(consumer);
-      consumers.set(socket.id, list);
-
-      if (consumer.kind === 'video') {
-        socket.data[`videoConsumer_${ch}`] = consumer;
-      }
-
-      consumer.on('transportclose', () => console.log(`[${ch}] ${kind} consumer transport closed`));
-      consumer.on('producerclose', () => console.log(`[${ch}] ${kind} producer closed -> consumer closed`));
-
-      ok(cb, {
-        id: consumer.id,
-        producerId: target.id,
-        kind: consumer.kind,
-        rtpParameters: consumer.rtpParameters
-      });
+      ok(cb, { id: c.id, producerId: prod.id, kind: c.kind, rtpParameters: c.rtpParameters });
     } catch (e) {
-      console.error('consume error', e);
-      errAck(cb, e.message || 'consume failed');
+      console.error('consume', e);
+      errAck(cb, 'consume failed');
     }
   });
 
   socket.on('resume', async ({ consumerId }, cb) => {
     try {
-      const list = consumers.get(socket.id) || [];
-      const c = list.find(x => x.id === consumerId);
+      const list = state.consumersBySocket.get(socket.id) || [];
+      const c = list.find((x) => x.id === consumerId);
       if (!c) return errAck(cb, 'consumer not found');
       await c.resume();
       ok(cb);
     } catch (e) {
-      console.error('resume error', e);
-      errAck(cb, e.message || 'resume failed');
+      console.error('resume', e);
+      errAck(cb, 'resume failed');
     }
   });
 
-  // let viewer change preferred simulcast layer (for quality menu)
-  socket.on('setPreferredLayers', async ({ channelId, spatialLayer = 2, temporalLayer = null }, cb) => {
+  socket.on('setPreferredLayers', async ({ spatialLayer = 2, temporalLayer = null }, cb) => {
     try {
-      const ch = getChannelIdFromPayload({ channelId });
-      if (!ch) return errAck(cb, 'invalid channelId');
-      const c = socket.data[`videoConsumer_${ch}`];
+      const c = state.videoConsumerBySocket.get(socket.id);
       if (!c) return errAck(cb, 'no video consumer yet');
       await c.setPreferredLayers({ spatialLayer, temporalLayer });
       ok(cb);
     } catch (e) {
-      console.error('setPreferredLayers error', e);
-      errAck(cb, e.message || 'setPreferredLayers failed');
+      console.error('setPreferredLayers', e);
+      errAck(cb, 'setPreferredLayers failed');
     }
   });
 
   socket.on('disconnect', () => {
-    // Close any transports/consumers we created (keep simple cleanup)
-    for (const ch of CHANNEL_IDS) {
-      try { socket.data[`sendTransport_${ch}`]?.close(); } catch {}
-      try { socket.data[`recvTransport_${ch}`]?.close(); } catch {}
-      broadcastViewerCount(ch);
-    }
-    const list = consumers.get(socket.id) || [];
-    for (const c of list) { try { c.close(); } catch {} }
-    consumers.delete(socket.id);
+    try {
+      const t = state.transports.get(socket.id);
+      if (t?.send) try { t.send.close(); } catch {}
+      if (t?.recv) try { t.recv.close(); } catch {}
+      state.transports.delete(socket.id);
+
+      const list = state.consumersBySocket.get(socket.id) || [];
+      for (const c of list) { try { c.close(); } catch {} }
+      state.consumersBySocket.delete(socket.id);
+      state.videoConsumerBySocket.delete(socket.id);
+    } catch {}
+    broadcastViewers(liveId);
   });
 });
 
-// -------- Global crash guards --------
-process.on('unhandledRejection', (reason) => {
-  console.error('[unhandledRejection]', reason);
-});
-process.on('uncaughtException', (err) => {
-  console.error('[uncaughtException]', err);
+// ---------------- Error handler ----------------
+app.use((err, _req, res, _next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });

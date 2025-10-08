@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>Watch • KoHat Live</title>
@@ -7,32 +7,34 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+  <!-- Header -->
   <header class="header">
-    <a href="/" class="brand">🎥 KoHat Live</a>
+    <a href="/lives.html" class="brand">🎥 KoHat Live</a>
     <div class="actions">
-      <a class="btn big" href="/login">Start Broadcasting</a>
-      <a class="btn big ghost" href="/viewer.html">Watch Live</a>
+      <button id="browse" class="btn ghost">Browse Lives</button>
+      <button id="signout" class="btn">Sign out</button>
     </div>
   </header>
 
+  <!-- Auth guard -->
+  <script>
+    (function requireAuth() {
+      const token = localStorage.getItem('token') || localStorage.getItem('authToken');
+      if (!token) location.replace('/signin.html');
+    })();
+  </script>
+
+  <!-- Main -->
   <main class="main">
-    <section class="card">
-      <h2 style="margin-top:0">Viewer</h2>
+    <section class="card" style="max-width:960px;margin:0 auto;">
+      <h2 style="margin-top:0;">Live Stream</h2>
 
-      <!-- channel picker -->
-      <div class="controls" style="justify-content:center; gap:12px; margin-bottom:10px; flex-wrap:wrap">
-        <a class="btn" href="/viewer.html?ch=b1">Broadcaster 1</a>
-        <a class="btn" href="/viewer.html?ch=b2">Broadcaster 2</a>
-      </div>
-
-      <!-- player wrapper (no custom buttons; native controls only) -->
+      <!-- Player -->
       <div class="player" id="player">
-        <!-- top-left badges -->
         <div class="overlay top-left">
           <span id="live" class="badge">Checking…</span>
           <span id="vc" class="badge">👀 0</span>
         </div>
-
         <video
           id="remote"
           autoplay
@@ -44,26 +46,24 @@
         ></video>
       </div>
 
-      <!-- outside toolbar (quality only) -->
-      <div class="toolbar">
-        <label for="qualitySel">Quality</label>
-        <select id="qualitySel">
+      <!-- Toolbar -->
+      <div class="toolbar" style="margin-top:12px;flex-wrap:wrap;">
+        <label for="qualitySel">Quality:</label>
+        <select id="qualitySel" class="btn">
           <option value="auto">Auto</option>
           <option value="high">High</option>
           <option value="med">Medium</option>
           <option value="low">Low</option>
         </select>
+        <span class="right small" id="status" style="opacity:.85;">Idle</span>
       </div>
 
-      <div id="skel" class="skel" style="margin:12px auto 0;"></div>
+      <div id="skel" class="skel" style="margin:12px auto 0; display:none;"></div>
 
-      <!-- small readouts under the player -->
-      <div class="badges" style="justify-content:center">
+      <div class="badges" style="justify-content:center;margin-top:10px;">
         <span id="res" class="badge">–</span>
         <span id="quality" class="badge">–</span>
       </div>
-
-      <p id="status" style="margin-top:8px; opacity:.85; text-align:center"></p>
     </section>
   </main>
 
@@ -79,6 +79,154 @@
   <div id="toast" class="toast"></div>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script type="module" src="/viewer.js"></script>
+  <script type="module">
+    // ---------------- Header actions ----------------
+    document.getElementById('browse').onclick = () => location.href = '/lives.html';
+    document.getElementById('signout').onclick = () => {
+      localStorage.clear();
+      location.replace('/signin.html');
+    };
+
+    // ---------------- Global helpers ----------------
+    const toast = (msg, t=1500) => {
+      const el = document.getElementById('toast');
+      if (!el) return;
+      el.textContent = msg;
+      el.style.display = 'block';
+      setTimeout(() => (el.style.display = 'none'), t);
+    };
+
+    const statusEl = document.getElementById('status');
+    const badgeLive = document.getElementById('live');
+    const badgeVC = document.getElementById('vc');
+    const badgeRes = document.getElementById('res');
+    const badgeQ = document.getElementById('quality');
+    const skel = document.getElementById('skel');
+    const remote = document.getElementById('remote');
+
+    // ---------------- Auth + live slug ----------------
+    const token = localStorage.getItem('token') || localStorage.getItem('authToken') || '';
+    const slug = new URLSearchParams(location.search).get('slug');
+    if (!slug) {
+      statusEl.textContent = '❌ Missing live slug. Please open from the Live List.';
+      badgeLive.textContent = 'OFFLINE';
+      badgeLive.className = 'badge';
+      throw new Error('Missing slug');
+    }
+
+    // ---------------- Socket.IO connection ----------------
+    import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
+    const socket = io({ auth: { role: 'viewer', token, slug } });
+
+    socket.on('connect', () => {
+      statusEl.textContent = '🔗 Connected';
+    });
+    socket.on('disconnect', () => {
+      statusEl.textContent = '❌ Disconnected';
+      badgeLive.textContent = 'OFFLINE';
+      badgeLive.className = 'badge';
+    });
+    socket.on('viewers', (n) => (badgeVC.textContent = `👀 ${n}`));
+    socket.on('newProducer', ({ kind }) => {
+      toast(`${kind} stream updated`);
+      if (kind === 'video') consumeVideo();
+      if (kind === 'audio') consumeAudio();
+    });
+
+    // ---------------- mediasoup setup ----------------
+    let device, recvTransport, videoConsumer, audioConsumer;
+    async function loadDevice() {
+      if (device) return;
+      const caps = await new Promise((res) => socket.emit('getRtpCapabilities', null, res));
+      device = new mediasoupClient.Device();
+      await device.load({ routerRtpCapabilities: caps });
+    }
+
+    async function ensureRecvTransport() {
+      if (recvTransport) return;
+      const params = await new Promise((res) => socket.emit('createRecvTransport', null, res));
+      recvTransport = device.createRecvTransport(params);
+
+      recvTransport.on('connect', ({ dtlsParameters }, callback, errback) =>
+        socket.emit('connectRecvTransport', { dtlsParameters }, (r) =>
+          r?.error ? errback(new Error(r.error)) : callback()
+        )
+      );
+    }
+
+    async function consume(kind) {
+      await loadDevice();
+      await ensureRecvTransport();
+      const params = await new Promise((res) =>
+        socket.emit('consume', { kind, rtpCapabilities: device.rtpCapabilities }, res)
+      );
+      if (params?.error) throw new Error(params.error);
+      const consumer = await recvTransport.consume(params);
+      await socket.emit('resume', { consumerId: consumer.id }, () => {});
+      return consumer;
+    }
+
+    async function consumeVideo() {
+      try {
+        skel.style.display = 'block';
+        badgeLive.textContent = 'LIVE';
+        badgeLive.className = 'badge live';
+        const c = await consume('video');
+        videoConsumer = c;
+        const track = c.track;
+        const stream = new MediaStream([track]);
+        remote.srcObject = stream;
+        track.onended = () => {
+          badgeLive.textContent = 'OFFLINE';
+          badgeLive.className = 'badge';
+          remote.srcObject = null;
+        };
+        skel.style.display = 'none';
+        statusEl.textContent = '🎥 Video playing';
+      } catch (err) {
+        skel.style.display = 'none';
+        badgeLive.textContent = 'OFFLINE';
+        badgeLive.className = 'badge';
+        statusEl.textContent = '⚠️ Waiting for video…';
+      }
+    }
+
+    async function consumeAudio() {
+      try {
+        const c = await consume('audio');
+        audioConsumer = c;
+        const track = c.track;
+        const s = remote.srcObject || new MediaStream();
+        s.addTrack(track);
+        remote.srcObject = s;
+      } catch (err) {
+        console.warn('audio consume failed', err);
+      }
+    }
+
+    // ---------------- Quality control ----------------
+    const qualitySel = document.getElementById('qualitySel');
+    qualitySel.onchange = () => {
+      const v = qualitySel.value;
+      const pref =
+        v === 'high'
+          ? { spatialLayer: 2 }
+          : v === 'med'
+          ? { spatialLayer: 1 }
+          : v === 'low'
+          ? { spatialLayer: 0 }
+          : { spatialLayer: 2 };
+      socket.emit('setPreferredLayers', pref, () => {
+        badgeQ.textContent = `Quality: ${v}`;
+      });
+    };
+
+    // ---------------- Start playback ----------------
+    consumeVideo().catch(() => {
+      statusEl.textContent = '⚠️ Waiting for live stream…';
+      skel.style.display = 'block';
+    });
+    consumeAudio().catch(() => {});
+  </script>
 </body>
 </html>
