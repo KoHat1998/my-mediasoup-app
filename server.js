@@ -1,4 +1,4 @@
-// server.js — KoHat Live (multi-room, auth-required; integrates friend /streams APIs)
+// server.js — KoHat Live (multi-room, auth-optional with TEST_AUTH_BYPASS; integrates friend /streams APIs)
 
 const path = require('path');
 const express = require('express');
@@ -14,7 +14,7 @@ const WEBRTC_MIN_PORT = parseInt(process.env.WEBRTC_MIN_PORT || '40000', 10);
 const WEBRTC_MAX_PORT = parseInt(process.env.WEBRTC_MAX_PORT || '49999', 10);
 const TEST_AUTH_BYPASS = String(process.env.TEST_AUTH_BYPASS || '').toLowerCase() === 'true';
 
-// Your friend’s backend base (used for /login, /streams/start, /streams/stop, /streams/active)
+// Your friend’s backend base (used for /login, /streams/start, /streams/stop)
 const AUTH_BASE = process.env.AUTH_BASE || 'https://livenix.duckdns.org/api';
 
 // ---------------- Small HTTP helpers ----------------
@@ -42,11 +42,9 @@ async function httpJSON(url, options = {}) {
   return data ?? {};
 }
 
-// ---- FormData helper for friend API (start/stop expect multipart/form-data) ----
 async function httpForm(url, fields = {}, headers = {}) {
   const f = await getFetch();
 
-  // Node 18+ has global FormData; Node 16 fallback to form-data
   let FormDataCtor = typeof FormData !== 'undefined' ? FormData : null;
   if (!FormDataCtor) {
     const mod = await import('form-data');
@@ -171,6 +169,31 @@ function broadcastViewers(liveId) {
   io.to(rn).emit('viewers', members.size);
 }
 
+/** Lazily create a live when a viewer/broadcaster connects with an unknown id/slug. */
+function getOrCreateLiveFromHint(hint) {
+  const bySlug = findLiveBySlug(hint);
+  if (bySlug) return bySlug;
+
+  if (lives.has(hint)) return lives.get(hint);
+
+  const id = hint; // keep stable so broadcaster & viewers use the same key
+  const live = {
+    id,
+    slug: hint,
+    title: `Live ${hint}`,
+    description: null,
+    hostUserId: 'auto',
+    isLive: true,
+    createdAt: new Date().toISOString(),
+    endedAt: null,
+    state: null
+  };
+  lives.set(id, live);
+  ensureLiveState(id);
+  console.log('ℹ️ created live from hint:', { id: live.id, slug: live.slug });
+  return live;
+}
+
 // ---------------- Auth Helper ----------------
 function requireAuthHeader(req, res, next) {
   if (TEST_AUTH_BYPASS) {
@@ -184,8 +207,6 @@ function requireAuthHeader(req, res, next) {
 }
 
 // ---------------- REST: Lives ----------------
-
-// Create live (and sync to friend backend: POST /streams/start with FormData)
 app.post('/api/lives', requireAuthHeader, async (req, res) => {
   const { title, description } = req.body || {};
   const id = randomUUID();
@@ -217,7 +238,6 @@ app.post('/api/lives', requireAuthHeader, async (req, res) => {
   res.json(live);
 });
 
-// Active lives list (local memory is the source of truth)
 app.get('/api/lives', requireAuthHeader, async (_req, res) => {
   const list = Array.from(lives.values())
     .filter((l) => l.isLive)
@@ -231,7 +251,6 @@ app.get('/api/lives', requireAuthHeader, async (_req, res) => {
   return res.json(list);
 });
 
-// End (stop) a live (and sync to friend backend: POST /streams/stop with FormData)
 app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
   const live = lives.get(req.params.id);
   if (!live) return res.status(404).json({ error: 'Not found' });
@@ -268,15 +287,7 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/', (_req, res) => res.redirect('/lives.html'));
 app.use(express.static('public')); // serves /signin.html, /signup.html, etc.
 
-/* ---------------- Inline viewer routes ----------------
-   These serve a minimal mediasoup-client + Socket.IO viewer at:
-   - /player_only.html
-   - /viewer
-   - /viewer.html
-
-   Accepts any of: ?slug=, ?liveId=, ?id=, ?room=, ?ch=
-   Optional: ?token= (Bearer or raw); ignored if TEST_AUTH_BYPASS=true
-------------------------------------------------------- */
+/* -------- Inline viewer: /player_only.html (also /viewer, /viewer.html) -------- */
 const PLAYER_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -436,21 +447,27 @@ app.get(['/player_only.html', '/viewer', '/viewer.html'], (_req, res) => {
 });
 
 // ---------------- Socket.IO ----------------
+// ✔ Lazy-create a live if none exists for the provided slug/liveId
 io.use((socket, next) => {
-  const { role, token: raw, liveId, slug } = socket.handshake.auth || {};
+  const { role, token: raw, liveId: hintedLiveId, slug: hintedSlug } = socket.handshake.auth || {};
   const token = raw ? (/^Bearer\s+/i.test(raw) ? raw : `Bearer ${raw}`) : '';
 
   if (!TEST_AUTH_BYPASS && !token) {
     return next(new Error('auth required'));
   }
 
-  socket.data.role = role || 'viewer';
+  socket.data.role = (role || 'viewer').toLowerCase();
   socket.data.token = token || 'Bearer fake';
 
   let live = null;
-  if (liveId && lives.has(liveId)) live = lives.get(liveId);
-  if (!live && slug) live = findLiveBySlug(slug);
-  if (!live) return next(new Error('live not found'));
+  if (hintedLiveId && lives.has(hintedLiveId)) live = lives.get(hintedLiveId);
+  if (!live && hintedSlug) live = findLiveBySlug(hintedSlug);
+
+  if (!live) {
+    const hint = hintedSlug || hintedLiveId;
+    if (!hint) return next(new Error('live not found'));
+    live = getOrCreateLiveFromHint(hint);
+  }
 
   socket.data.liveId = live.id;
   socket.data.slug = live.slug;
@@ -458,7 +475,6 @@ io.use((socket, next) => {
   next();
 });
 
-// (optional but useful for debugging)
 io.engine.on('connection_error', (err) => {
   console.error('engine.io connection_error:', {
     code: err.code,
