@@ -18,14 +18,7 @@
     </div>
   </header>
 
-  <!-- Auth Guard -->
-  <script>
-    (function requireAuth() {
-      const token = localStorage.getItem('token') || localStorage.getItem('authToken');
-      if (!token) location.replace('/signin.html');
-    })();
-  </script>
-
+  <!-- Main -->
   <main class="main">
     <section style="max-width: 1000px; margin: 0 auto; width:100%;">
       <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap">
@@ -34,10 +27,11 @@
         <span class="right"></span>
       </div>
 
-      <div id="loading" class="small" style="margin:8px 0; opacity:.8;">Loading lives...</div>
       <div id="list" class="grid cards"></div>
+
       <div id="empty" class="empty" style="display:none">
-        No live streams right now. Be the first to <a class="btn link" href="#" id="linkGoLive">go live</a>.
+        No live streams right now. Be the first to
+        <a class="btn link" href="#" id="linkGoLive">go live</a>.
       </div>
     </section>
   </main>
@@ -51,121 +45,7 @@
     </nav>
   </footer>
 
-  <script>
-    // ---------------- Header UI ----------------
-    (function headerUI() {
-      const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
-      const email = storedUser.email || localStorage.getItem('email') || '';
-      const userEmail = document.getElementById('userEmail');
-      if (email) userEmail.textContent = email;
-
-      document.getElementById('signout').onclick = () => {
-        localStorage.clear();
-        location.replace('/signin.html');
-      };
-    })();
-
-    // ---------------- Globals ----------------
-    const listEl = document.getElementById('list');
-    const emptyEl = document.getElementById('empty');
-    const loadingEl = document.getElementById('loading');
-    const token = localStorage.getItem('token') || localStorage.getItem('authToken') || '';
-
-    // ---------------- Load live list ----------------
-    async function loadLives() {
-      listEl.innerHTML = '';
-      emptyEl.style.display = 'none';
-      loadingEl.style.display = 'block';
-      try {
-        const r = await fetch('/api/lives', {
-          headers: { 'Authorization': token }
-        });
-
-        if (r.status === 401) {
-          localStorage.clear();
-          location.replace('/signin.html');
-          return;
-        }
-
-        const lives = await r.json();
-        loadingEl.style.display = 'none';
-
-        if (!Array.isArray(lives) || lives.length === 0) {
-          emptyEl.style.display = 'block';
-          return;
-        }
-
-        listEl.innerHTML = lives.map(l => `
-          <div class="tile">
-            <div class="badges"><span class="badge live">LIVE</span></div>
-            <h3 class="title">${escapeHtml(l.title || 'Untitled Live')}</h3>
-            <p class="meta">Started ${new Date(l.createdAt).toLocaleString()}</p>
-            <div style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap">
-              <a class="btn ghost" href="/viewer.html?slug=${encodeURIComponent(l.slug)}">Watch</a>
-              <button class="btn link" onclick="copySlug('${encodeURIComponent(l.slug)}')">Copy link</button>
-            </div>
-          </div>
-        `).join('');
-      } catch (e) {
-        console.error(e);
-        loadingEl.style.display = 'none';
-        emptyEl.style.display = 'block';
-        emptyEl.textContent = '⚠️ Failed to load lives. Please try again.';
-      }
-    }
-
-    // ---------------- Create new live ----------------
-    async function createLive() {
-      const title = prompt('Live title?') || 'My Live';
-      try {
-        const r = await fetch('/api/lives', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': token },
-          body: JSON.stringify({ title })
-        });
-
-        if (r.status === 401) {
-          localStorage.clear();
-          location.replace('/signin.html');
-          return;
-        }
-
-        const live = await r.json();
-        if (!r.ok || !live?.id) throw new Error(live?.error || 'Failed to create live');
-
-        // Redirect to broadcaster page
-        location.href = '/broadcast.html?id=' + encodeURIComponent(live.id);
-      } catch (e) {
-        alert(e.message || 'Failed to create live');
-      }
-    }
-
-    // ---------------- Helpers ----------------
-    function escapeHtml(s = '') {
-      return s.replace(/[&<>"']/g, c => (
-        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-      ));
-    }
-
-    window.copySlug = (slugEnc) => {
-      const slug = decodeURIComponent(slugEnc);
-      const url = `${location.origin}/viewer.html?slug=${slug}`;
-      navigator.clipboard?.writeText(url).then(
-        () => alert('✅ Link copied:\n' + url),
-        () => alert('⚠️ Copy failed. Link:\n' + url)
-      );
-    };
-
-    // ---------------- Wire buttons ----------------
-    document.getElementById('create').onclick = createLive;
-    document.getElementById('refresh').onclick = loadLives;
-    document.getElementById('linkGoLive').onclick = (e) => {
-      e.preventDefault();
-      createLive();
-    };
-
-    // ---------------- Initial load ----------------
-    loadLives();
-  </script>
+  <!-- Live List logic -->
+  <script type="module" src="/lives.js"></script>
 </body>
 </html>

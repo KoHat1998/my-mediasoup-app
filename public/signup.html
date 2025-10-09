@@ -23,7 +23,7 @@
         Sign up to watch lives and start streaming.
       </p>
 
-      <form id="f" autocomplete="on">
+      <form id="signupForm" autocomplete="on">
         <label class="label">Name (optional)</label>
         <input class="input" type="text" name="name" placeholder="Your display name" />
 
@@ -44,6 +44,7 @@
     </section>
   </main>
 
+  <!-- Footer -->
   <footer class="footer">
     <small>© 2025 KoHat Live</small>
     <nav>
@@ -54,74 +55,71 @@
   </footer>
 
   <script>
-  // Call your friend's API directly (CORS now enabled)
-  const API_REGISTER = 'https://livenix.duckdns.org/api/register';
+    const API_REGISTER = 'https://livenix.duckdns.org/api/register';
 
-  const form = document.getElementById('f');
-  const msg  = document.getElementById('msg');
-  const btn  = document.getElementById('submitBtn');
+    const form = document.getElementById('signupForm');
+    const msg  = document.getElementById('msg');
+    const btn  = document.getElementById('submitBtn');
 
-  form.onsubmit = async (e) => {
-    e.preventDefault();
-    msg.textContent = '';
-    msg.style.color = '';
-    btn.disabled = true;
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      msg.textContent = '';
+      msg.style.color = '';
+      btn.disabled = true;
 
-    const body = Object.fromEntries(new FormData(form));
+      const body = Object.fromEntries(new FormData(form));
 
-    // client-side password match
-    if (body.password !== body.confirm_password) {
-      msg.textContent = "❌ Passwords don't match.";
-      msg.style.color = 'red';
-      btn.disabled = false;
-      return;
-    }
-
-    try {
-      const res = await fetch(API_REGISTER, {
-        method: 'POST',
-        // IMPORTANT for Laravel: Accept JSON to avoid 302 redirect to web routes
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({
-          name: body.name || '',
-          email: body.email,
-          password: body.password,
-          // support both common field names
-          confirm_password: body.confirm_password,
-          password_confirmation: body.confirm_password
-        }),
-        // optional but explicit
-        mode: 'cors',
-        redirect: 'follow'
-      });
-
-      let data = {};
-      try { data = await res.json(); } catch {}
-
-      if (!res.ok) {
-        // Laravel may return validation errors in different shapes
-        const firstError =
-          data.message ||
-          (data.errors && Object.values(data.errors)[0]?.[0]) ||
-          'Sign up failed';
-        msg.textContent = `❌ ${firstError}`;
+      // ✅ Client-side check: confirm passwords match
+      if (body.password !== body.confirm_password) {
+        msg.textContent = "❌ Passwords don't match.";
         msg.style.color = 'red';
         btn.disabled = false;
         return;
       }
 
-      msg.textContent = '✅ Account created! Redirecting…';
-      msg.style.color = 'green';
-      setTimeout(() => location.href = '/signin.html', 1200);
-    } catch (err) {
-      msg.textContent = 'Network error. Please try again.';
-      msg.style.color = 'red';
-      btn.disabled = false;
-    }
-  };
-</script>
+      try {
+        const res = await fetch(API_REGISTER, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({
+            name: body.name || '',
+            email: body.email,
+            password: body.password,
+            password_confirmation: body.confirm_password // Laravel standard
+          }),
+          mode: 'cors',
+          redirect: 'follow'
+        });
+
+        let data = {};
+        try { data = await res.json(); } catch {}
+
+        if (!res.ok) {
+          // Laravel may send detailed validation errors
+          const firstError =
+            data.message ||
+            (data.errors && Object.values(data.errors)[0]?.[0]) ||
+            'Sign up failed';
+          msg.textContent = `❌ ${firstError}`;
+          msg.style.color = 'red';
+          btn.disabled = false;
+          return;
+        }
+
+        msg.textContent = '✅ Account created successfully! Redirecting…';
+        msg.style.color = 'green';
+        setTimeout(() => location.href = '/signin.html', 1200);
+      } catch (err) {
+        console.error('Registration error:', err);
+        msg.textContent = 'Network error. Please try again.';
+        msg.style.color = 'red';
+      } finally {
+        btn.disabled = false;
+      }
+    };
+  </script>
 </body>
 </html>

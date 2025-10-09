@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+  <!-- Header -->
   <header class="header">
     <a href="/" class="brand">🎥 KoHat Live</a>
     <div class="actions">
@@ -14,6 +15,7 @@
     </div>
   </header>
 
+  <!-- Main -->
   <main class="main" style="max-width:620px;margin:0 auto">
     <section class="card" style="padding:24px">
       <h1 style="margin:0 0 6px">Welcome back</h1>
@@ -23,10 +25,10 @@
 
       <form id="f" autocomplete="on">
         <label class="label">Email</label>
-        <input class="input" type="email" name="email" placeholder="you@example.com" required />
+        <input class="input" type="email" name="email" id="email" placeholder="you@example.com" required />
 
         <label class="label" style="margin-top:12px">Password</label>
-        <input class="input" type="password" name="password" required />
+        <input class="input" type="password" name="password" id="password" required />
 
         <div style="display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap">
           <button id="submitBtn" class="btn" type="submit">Sign in</button>
@@ -40,6 +42,7 @@
     </section>
   </main>
 
+  <!-- Footer -->
   <footer class="footer">
     <small>© 2025 KoHat Live</small>
     <nav>
@@ -63,7 +66,8 @@
       msg.style.color = '';
       btn.disabled = true;
 
-      const body = Object.fromEntries(new FormData(form));
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value.trim();
 
       try {
         const res = await fetch(API_LOGIN, {
@@ -72,7 +76,7 @@
             'Content-Type': 'application/json',
             'Accept': 'application/json'
           },
-          body: JSON.stringify({ email: body.email, password: body.password })
+          body: JSON.stringify({ email, password })
         });
 
         let data = {};
@@ -89,44 +93,47 @@
           return;
         }
 
-        // Normalize token: Laravel usually returns { access_token, token_type, user }
+        // Normalize token (Laravel usually returns { access_token, token_type, user })
         const access = data.access_token || data.token || '';
         const type   = (data.token_type || 'Bearer').trim();
         const bearer = access ? `${type} ${access}` : '';
 
-        // Save under BOTH keys so every page reads it consistently
+        // Save token for authenticated pages
         if (bearer) {
-          localStorage.setItem('token', bearer);       // many of our pages expect this
-          localStorage.setItem('authToken', bearer);   // previous code used this
+          localStorage.setItem('token', bearer);
+          localStorage.setItem('authToken', bearer); // for compatibility
         }
         if (data.user) {
           localStorage.setItem('user', JSON.stringify(data.user));
         }
 
-        // Redirect immediately (no delay) and prevent back button to sign-in
         msg.textContent = '✅ Login successful! Redirecting…';
         msg.style.color = 'green';
+
+        // Redirect user immediately
         location.replace('/lives.html');
 
-        // Fallback in case replace is blocked for some reason
+        // Backup redirect in case browser blocks replace
         setTimeout(() => {
           if (!/lives\.html$/.test(location.pathname)) {
             location.href = '/lives.html';
           }
-        }, 600);
+        }, 800);
       } catch (err) {
+        console.error('Login error:', err);
         msg.textContent = 'Network error. Please try again.';
         msg.style.color = 'red';
+      } finally {
         btn.disabled = false;
       }
     };
 
-    // Guest shortcut (for testing without backend)
+    // Guest login for local testing (no real backend)
     guestBtn.onclick = () => {
       const fake = 'Bearer TEST_FAKE_TOKEN';
       localStorage.setItem('token', fake);
       localStorage.setItem('authToken', fake);
-      localStorage.setItem('user', JSON.stringify({ email: 'tester@example.com' }));
+      localStorage.setItem('user', JSON.stringify({ email: 'guest@example.com' }));
       location.replace('/lives.html');
     };
   </script>

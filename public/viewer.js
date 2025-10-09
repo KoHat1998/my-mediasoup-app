@@ -1,202 +1,177 @@
 // public/viewer.js
 import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
-const el = (id) => document.getElementById(id);
-const toast = (t) => { const x = el('toast'); if (!x) return; x.textContent = t; x.style.display='block'; setTimeout(()=>x.style.display='none', 1600); };
+(() => {
+  'use strict';
 
-// --- Channel from URL (?ch=b1|b2)
-function getChannelId() {
-  const ch = new URLSearchParams(location.search).get('ch');
-  return ['b1','b2'].includes(ch) ? ch : null;
-}
-const channelId = getChannelId();
-if (channelId) document.title = (channelId === 'b1' ? 'Broadcaster 1' : 'Broadcaster 2') + ' • Watch';
-
-const socket = io();
-let device, recvTransport;
-const mediaStream = new MediaStream();
-let videoConsumer = null, audioConsumer = null;
-
-let statsTimer = null, lastBytes = 0, lastTs = 0;
-let lastResP = ''; // remember last displayed resolution to avoid DOM churn
-
-// Outside quality selector (below the video)
-const qualitySel = document.getElementById('qualitySel');
-let supportsQualityMenu = true;
-
-// skeleton / loading
-function skeleton(show){
-  const sk = el('skel'), v = el('remote');
-  if (sk) sk.style.display = show ? 'block' : 'none';
-  if (v)  v.style.display  = show ? 'none'  : 'block';
-}
-
-// quality badge (network)
-function setQualityBadge(kbps, plr){
-  const q = el('quality'); if (!q) return;
-  let cls = 'badge quality ';
-  let txt = `~${Math.round(kbps)} kbps`;
-  if (plr >= 5 || kbps < 200) { cls += 'bad'; txt += ' • Poor'; }
-  else if (plr >= 2 || kbps < 600) { cls += 'warn'; txt += ' • Fair'; }
-  else { cls += 'ok'; txt += ' • Good'; }
-  q.className = cls; q.textContent = txt;
-}
-
-async function loadDevice(){
-  const caps = await new Promise(res => socket.emit('getRtpCapabilities', res));
-  device = new mediasoupClient.Device(); await device.load({ routerRtpCapabilities: caps });
-
-  // If you want to gate the menu by codec support
-  const hasVp8 = device.rtpCapabilities.codecs.some(c => /video\/VP8/i.test(c.mimeType));
-  if (!hasVp8 && qualitySel) { supportsQualityMenu = false; qualitySel.disabled = true; qualitySel.title = 'Quality not available on this device'; }
-}
-
-async function makeRecvTransport() {
-  const params = await new Promise(res => socket.emit('createRecvTransport', { channelId }, res));
-  if (params?.error) throw new Error(params.error);
-  const t = device.createRecvTransport(params);
-  t.on('connect', ({ dtlsParameters }, callback, errback) => {
-    socket.emit('connectRecvTransport', { channelId, dtlsParameters }, (r)=> r==='ok' ? callback() : errback(new Error('connect failed')));
-  });
-  return t;
-}
-
-function attachTrack(kind, track){
-  const v = el('remote');
-  if (kind === 'video') { const old = mediaStream.getVideoTracks()[0]; if (old) mediaStream.removeTrack(old); mediaStream.addTrack(track); }
-  else { const old = mediaStream.getAudioTracks()[0]; if (old) mediaStream.removeTrack(old); mediaStream.addTrack(track); }
-  if (v && !v.srcObject) v.srcObject = mediaStream;
-}
-
-async function consumeKind(kind) {
-  const data = await new Promise(res => socket.emit('consume', { channelId, rtpCapabilities: device.rtpCapabilities, kind }, res));
-  if (data?.error) { if (kind === 'video') { const live = el('live'); if (live) live.textContent = 'Waiting for broadcaster…'; } return null; }
-  const consumer = await recvTransport.consume(data);
-  attachTrack(kind, consumer.track);
-  await new Promise(res => socket.emit('resume', { consumerId: consumer.id }, res));
-
-  consumer.on('producerclose', async () => { try { await reconsume(kind); } catch(e){ console.error(e); } });
-
-  return consumer;
-}
-
-async function reconsume(kind){
-  const data = await new Promise(res => socket.emit('consume', { channelId, rtpCapabilities: device.rtpCapabilities, kind }, res));
-  if (data?.error) return;
-  const newConsumer = await recvTransport.consume(data);
-  attachTrack(kind, newConsumer.track);
-  await new Promise(res => socket.emit('resume', { consumerId: newConsumer.id }, res));
-  if (kind === 'video') { try{ videoConsumer?.close(); }catch{} videoConsumer = newConsumer; }
-  else { try{ audioConsumer?.close(); }catch{} audioConsumer = newConsumer; }
-}
-
-function updateResolutionBadgeFromStats(stats) {
-  let w = 0, h = 0;
-
-  stats.forEach(s => {
-    // Chrome/Edge usually put frameWidth/Height on 'inbound-rtp'
-    if (s.type === 'inbound-rtp' && !s.isRemote) {
-      if (typeof s.frameWidth === 'number')  w = s.frameWidth;
-      if (typeof s.frameHeight === 'number') h = s.frameHeight;
-    }
-    // Safari/WebKit often exposes it on the 'track' stats
-    if (s.type === 'track' && s.kind === 'video') {
-      if (typeof s.frameWidth === 'number')  w = s.frameWidth || w;
-      if (typeof s.frameHeight === 'number') h = s.frameHeight || h;
-    }
-  });
-
-  if (h) {
-    const label = `${h}p`;
-    if (label !== lastResP) {
-      const r = el('res'); if (r) r.textContent = label;
-      lastResP = label;
-    }
-  }
-}
-
-function startStats(){
-  if (statsTimer) clearInterval(statsTimer);
-  lastBytes = 0; lastTs = 0; lastResP = '';
-  statsTimer = setInterval(async ()=>{
-    if (!videoConsumer) return;
-    const stats = await videoConsumer.getStats();
-
-    // bitrate / packet loss readout
-    let bytes=0, timestamp=0, pl=0, pr=0;
-    stats.forEach(s => { if (s.type === 'inbound-rtp' && !s.isRemote) { bytes = s.bytesReceived; timestamp = s.timestamp; pl = s.packetsLost || 0; pr = s.packetsReceived || 0; }});
-    if (lastTs && timestamp && bytes >= lastBytes) {
-      const kbps = ((bytes - lastBytes) * 8) / ((timestamp - lastTs) / 1000) / 1000;
-      const plr = pr > 0 ? (pl / (pr + pl)) * 100 : 0;
-      setQualityBadge(kbps, plr);
-    }
-    lastBytes = bytes; lastTs = timestamp;
-
-    // resolution badge from stats
-    updateResolutionBadgeFromStats(stats);
-  }, 2000);
-}
-
-async function watch() {
-  if (!channelId) { const s = el('status'); if (s) s.textContent = 'Pick a channel (?ch=b1 or ?ch=b2)'; return; }
-  try {
-    const s = el('status'); if (s) s.textContent = 'Connecting…'; skeleton(true);
-    await new Promise(res => socket.emit('join', { channelId }, res));
-    await loadDevice();
-    recvTransport = await makeRecvTransport();
-    videoConsumer = await consumeKind('video');
-    audioConsumer = await consumeKind('audio');
-    const live = el('live');
-    if (videoConsumer) { if (live) live.textContent = 'LIVE'; skeleton(false); startStats(); }
-    else { if (live) live.textContent = 'Waiting for broadcaster…'; }
-    if (s) s.textContent = '📺 Watching';
-  } catch (e) { console.error(e); const s = el('status'); if (s) s.textContent = e.message || 'Error starting viewer'; }
-}
-
-// server notifications
-socket.on('newProducer', async ({ channelId: cid, kind }) => {
-  if (cid && cid !== channelId) return;
-  if (!device || !recvTransport) return;
-  try { await reconsume(kind); } catch(e){ console.error(e); }
-});
-socket.on('viewerCount', ({ count }) => { const v = el('vc'); if (v) v.textContent = `👀 ${count}`; });
-socket.on('connect', () => toast('Connected'));
-socket.io.on('reconnect_attempt', () => toast('Reconnecting…'));
-socket.on('disconnect', () => toast('Disconnected'));
-
-// External quality menu (outside the player)
-if (qualitySel) {
-  qualitySel.onchange = async () => {
-    if (!supportsQualityMenu) return;
-
-    // Set preferred layer on the server
-    const map = { low:0, med:1, high:2 };
-    const v = qualitySel.value; 
-    const spatialLayer = map[v];
-
-    // Show a temporary requested label until stats confirm
-    const targetHeights = { low:360, med:540, high:720 };
-    const r = el('res');
-    if (r && targetHeights[v]) r.textContent = `${targetHeights[v]}p (requested)`;
-
-    await new Promise(res => socket.emit('setPreferredLayers', {
-      channelId,
-      spatialLayer: (typeof spatialLayer === 'number' ? spatialLayer : 2)
-    }, res));
-    // Stats loop will soon update to the *actual* resolution received.
+  // --------- DOM helpers ---------
+  const $ = (id) => document.getElementById(id);
+  const toast = (msg, t=1500) => {
+    const el = $('toast'); if (!el) return;
+    el.textContent = msg; el.style.display = 'block';
+    setTimeout(() => (el.style.display = 'none'), t);
   };
-}
 
-// Auto-play if channelId present
-document.addEventListener('DOMContentLoaded', () => {
-  if (channelId) watch();
-});
+  // Header actions
+  $('browse').onclick = () => location.href = '/lives.html';
+  $('signout').onclick = () => { localStorage.clear(); location.replace('/signin.html'); };
 
-// Small API for external apps (or your page) to control quality
-window.kohatViewer = {
-  setQuality: async (level /* 'low' | 'med' | 'high' */) => {
-    const map = { low:0, med:1, high:2 };
-    if (!device || !recvTransport) return;
-    await new Promise(res => socket.emit('setPreferredLayers', { channelId, spatialLayer: map[level] ?? 2 }, res));
+  // --------- Auth guard ---------
+  const token = localStorage.getItem('token') || localStorage.getItem('authToken') || '';
+  if (!token) { location.replace('/signin.html'); return; }
+
+  // --------- UI refs ---------
+  const statusEl = $('status');
+  const badgeLive = $('live');
+  const badgeVC = $('vc');
+  const badgeRes = $('res');
+  const badgeQ = $('quality');
+  const skel = $('skel');
+  const remote = $('remote');
+  const qualitySel = $('qualitySel');
+
+  // --------- Live slug from URL ---------
+  const slug = new URLSearchParams(location.search).get('slug');
+  if (!slug) {
+    statusEl.textContent = '❌ Missing live slug. Please open from the Live List.';
+    badgeLive.textContent = 'OFFLINE';
+    badgeLive.className = 'badge';
+    return;
   }
-};
+
+  // --------- Socket.IO connection ---------
+  const socket = io({ auth: { role: 'viewer', token, slug } });
+  socket.on('connect', () => { statusEl.textContent = '🔗 Connected'; });
+  socket.on('disconnect', () => {
+    statusEl.textContent = '❌ Disconnected';
+    badgeLive.textContent = 'OFFLINE';
+    badgeLive.className = 'badge';
+  });
+  socket.on('viewers', (n) => (badgeVC.textContent = `👀 ${n}`));
+  socket.on('newProducer', ({ kind }) => {
+    toast(`${kind} stream updated`);
+    if (kind === 'video') consumeVideo();
+    if (kind === 'audio') consumeAudio();
+  });
+
+  // --------- mediasoup state ---------
+  let device, recvTransport, videoConsumer, audioConsumer;
+
+  async function loadDevice() {
+    if (device) return;
+    const caps = await new Promise((res) => socket.emit('getRtpCapabilities', null, res));
+    device = new mediasoupClient.Device();
+    await device.load({ routerRtpCapabilities: caps });
+  }
+
+  async function ensureRecvTransport() {
+    if (recvTransport) return;
+    const params = await new Promise((res) => socket.emit('createRecvTransport', null, res));
+    recvTransport = device.createRecvTransport(params);
+    recvTransport.on('connect', ({ dtlsParameters }, callback, errback) =>
+      socket.emit('connectRecvTransport', { dtlsParameters }, (r) =>
+        r?.error ? errback(new Error(r.error)) : callback()
+      )
+    );
+  }
+
+  async function consume(kind) {
+    await loadDevice();
+    await ensureRecvTransport();
+    const params = await new Promise((res) =>
+      socket.emit('consume', { kind, rtpCapabilities: device.rtpCapabilities }, res)
+    );
+    if (params?.error) throw new Error(params.error);
+    const consumer = await recvTransport.consume(params);
+    await socket.emit('resume', { consumerId: consumer.id }, () => {});
+    return consumer;
+  }
+
+  async function consumeVideo() {
+    try {
+      skel.style.display = 'block';
+      badgeLive.textContent = 'LIVE';
+      badgeLive.className = 'badge live';
+      const c = await consume('video');
+      videoConsumer = c;
+      const track = c.track;
+      const stream = new MediaStream([track]);
+      remote.srcObject = stream;
+      track.onended = () => {
+        badgeLive.textContent = 'OFFLINE';
+        badgeLive.className = 'badge';
+        remote.srcObject = null;
+      };
+      skel.style.display = 'none';
+      statusEl.textContent = '🎥 Video playing';
+
+      // Optional: update resolution badge periodically
+      updateResolutionBadge(c).catch(()=>{});
+    } catch (err) {
+      skel.style.display = 'none';
+      badgeLive.textContent = 'OFFLINE';
+      badgeLive.className = 'badge';
+      statusEl.textContent = '⚠️ Waiting for video…';
+    }
+  }
+
+  async function consumeAudio() {
+    try {
+      const c = await consume('audio');
+      audioConsumer = c;
+      const track = c.track;
+      const s = remote.srcObject || new MediaStream();
+      s.addTrack(track);
+      remote.srcObject = s;
+    } catch (err) {
+      console.warn('audio consume failed', err);
+    }
+  }
+
+  // --------- Quality control (simulcast layers) ---------
+  qualitySel.onchange = () => {
+    const v = qualitySel.value;
+    const pref =
+      v === 'high' ? { spatialLayer: 2 } :
+      v === 'med'  ? { spatialLayer: 1 } :
+      v === 'low'  ? { spatialLayer: 0 } :
+                     { spatialLayer: 2 };
+    socket.emit('setPreferredLayers', pref, () => {
+      badgeQ.textContent = `Quality: ${v}`;
+    });
+  };
+
+  // --------- Resolution badge from stats ---------
+  async function updateResolutionBadge(consumer) {
+    let lastLabel = '';
+    setInterval(async () => {
+      if (!consumer) return;
+      const stats = await consumer.getStats();
+      let w = 0, h = 0;
+      stats.forEach(s => {
+        if (s.type === 'inbound-rtp' && !s.isRemote) {
+          if (typeof s.frameWidth === 'number')  w = s.frameWidth;
+          if (typeof s.frameHeight === 'number') h = s.frameHeight;
+        }
+        if (s.type === 'track' && s.kind === 'video') {
+          if (typeof s.frameWidth === 'number')  w = s.frameWidth || w;
+          if (typeof s.frameHeight === 'number') h = s.frameHeight || h;
+        }
+      });
+      if (h) {
+        const label = `${h}p`;
+        if (label !== lastLabel) {
+          badgeRes.textContent = label;
+          lastLabel = label;
+        }
+      }
+    }, 2000);
+  }
+
+  // --------- Start playback ---------
+  consumeVideo().catch(() => {
+    statusEl.textContent = '⚠️ Waiting for live stream…';
+    skel.style.display = 'block';
+  });
+  consumeAudio().catch(() => {});
+})();
