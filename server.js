@@ -13,8 +13,6 @@ const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '52.62.49.247';
 const WEBRTC_MIN_PORT = parseInt(process.env.WEBRTC_MIN_PORT || '40000', 10);
 const WEBRTC_MAX_PORT = parseInt(process.env.WEBRTC_MAX_PORT || '49999', 10);
 const TEST_AUTH_BYPASS = String(process.env.TEST_AUTH_BYPASS || '').toLowerCase() === 'true';
-
-// Your friend’s backend base (used for /streams/start, /streams/stop, /streams/active)
 const AUTH_BASE = process.env.AUTH_BASE || 'https://livenix.duckdns.org/api';
 
 // ---------------- Small HTTP helpers ----------------
@@ -43,7 +41,6 @@ app.use(express.urlencoded({ extended: false }));
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    // Allow local dev + your domain (safe to expand if needed)
     origin: [
       'http://localhost:3000',
       'http://127.0.0.1:3000',
@@ -177,7 +174,6 @@ app.post('/api/lives', requireAuthHeader, async (req, res) => {
         viewer_url: `https://${req.headers.host}/viewer.html?slug=${live.slug}`
       })
     });
-    // Optional: emit a push event for your own clients (for real-time lists)
     io.emit('streams:changed', { type: 'start', id: live.id, slug: live.slug, title: live.title });
   } catch (e) {
     console.warn('⚠️ Failed to sync /streams/start:', e.message);
@@ -186,16 +182,12 @@ app.post('/api/lives', requireAuthHeader, async (req, res) => {
   res.json(live);
 });
 
-// Active lives list
-// Option A (current in-memory): keep your own list
-// Option B (proxy friend backend): uncomment the block below to make /api/lives read from /streams/active
+// Active lives list — sync with friend backend if available
 app.get('/api/lives', requireAuthHeader, async (_req, res) => {
-  // --- Option B: use friend backend as source of truth ---
   try {
     const actives = await httpJSON(`${AUTH_BASE}/streams/active`);
-    // Map fields to the shape your UI expects
     const mapped = (Array.isArray(actives) ? actives : []).map(s => ({
-      id: s.id || s._id || s.slug, // fallback if their id differs
+      id: s.id || s._id || s.slug,
       slug: s.slug,
       title: s.title || 'Untitled Live',
       description: s.description || null,
@@ -204,7 +196,6 @@ app.get('/api/lives', requireAuthHeader, async (_req, res) => {
     return res.json(mapped);
   } catch (err) {
     console.warn('⚠️ streams/active failed, falling back to local list:', err.message);
-    // --- Fallback to local in-memory list ---
     const list = Array.from(lives.values())
       .filter((l) => l.isLive)
       .map((l) => ({
@@ -226,7 +217,7 @@ app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
   live.isLive = false;
   live.endedAt = new Date().toISOString();
 
-  // Close mediasoup things
+  // Close mediasoup resources
   if (live.state) {
     try {
       for (const [, t] of live.state.transports) {
@@ -244,7 +235,6 @@ app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
       method: 'POST',
       body: JSON.stringify({ id: live.id, slug: live.slug })
     });
-    // Optional push
     io.emit('streams:changed', { type: 'stop', id: live.id, slug: live.slug });
   } catch (e) {
     console.warn('⚠️ Failed to sync /streams/stop:', e.message);
@@ -256,7 +246,7 @@ app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
 // ---------------- Static Routes ----------------
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/', (_req, res) => res.redirect('/lives.html'));
-app.use(express.static('public')); // serves /signin.html, /signup.html, etc.
+app.use(express.static('public'));
 
 // ---------------- Socket.IO ----------------
 io.use((socket, next) => {
