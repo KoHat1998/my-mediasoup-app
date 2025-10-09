@@ -16,16 +16,26 @@
     </div>
   </header>
 
-  <!-- Main -->
-  <main class="main">
-    <section class="card" style="max-width:960px;margin:0 auto;">
-      <h2 style="margin-top:0;">Live Stream</h2>
+  <!-- Auth guard: viewers must be signed in -->
+  <script>
+    (function requireAuth(){
+      const token = localStorage.getItem('token');
+      if (!token) location.href = '/signin.html';
+    })();
+  </script>
 
+  <main class="main">
+    <section class="card">
+      <h2 style="margin-top:0">Viewer</h2>
+
+      <!-- player wrapper -->
       <div class="player" id="player">
+        <!-- top-left badges -->
         <div class="overlay top-left">
           <span id="live" class="badge">Checking…</span>
           <span id="vc" class="badge">👀 0</span>
         </div>
+
         <video
           id="remote"
           autoplay
@@ -37,23 +47,26 @@
         ></video>
       </div>
 
-      <div class="toolbar" style="margin-top:12px;flex-wrap:wrap;">
-        <label for="qualitySel">Quality:</label>
-        <select id="qualitySel" class="btn">
+      <!-- outside toolbar (quality) -->
+      <div class="toolbar">
+        <label for="qualitySel">Quality</label>
+        <select id="qualitySel">
           <option value="auto">Auto</option>
           <option value="high">High</option>
           <option value="med">Medium</option>
           <option value="low">Low</option>
         </select>
-        <span class="right small" id="status" style="opacity:.85;">Idle</span>
       </div>
 
-      <div id="skel" class="skel" style="margin:12px auto 0; display:none;"></div>
+      <div id="skel" class="skel" style="margin:12px auto 0;"></div>
 
-      <div class="badges" style="justify-content:center;margin-top:10px;">
+      <!-- small readouts under the player -->
+      <div class="badges" style="justify-content:center">
         <span id="res" class="badge">–</span>
         <span id="quality" class="badge">–</span>
       </div>
+
+      <p id="status" style="margin-top:8px; opacity:.85; text-align:center"></p>
     </section>
   </main>
 
@@ -68,9 +81,19 @@
 
   <div id="toast" class="toast"></div>
 
-  <!-- Runtime libs -->
   <script src="/socket.io/socket.io.js"></script>
-  <!-- Viewer logic -->
+  <script type="module">
+    // Header actions
+    document.getElementById('browse').onclick = () => location.href = '/lives.html';
+    document.getElementById('signout').onclick = () => { localStorage.clear(); location.href = '/signin.html'; };
+
+    // Guard for slug: viewer joins by ?slug=your-live-slug
+    const slug = new URLSearchParams(location.search).get('slug');
+    if (!slug) {
+      const s = document.getElementById('status');
+      s.textContent = 'Missing live slug. Open from the Live List.';
+    }
+  </script>
   <script type="module" src="/viewer.js"></script>
 </body>
 </html>
