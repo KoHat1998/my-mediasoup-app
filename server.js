@@ -1,4 +1,4 @@
-// server.js — KoHat Live (multi-room, auth-required; CORS-enabled direct auth)
+// server.js — KoHat Live (multi-room, auth-required; integrates friend /streams APIs)
 
 const path = require('path');
 const express = require('express');
@@ -14,6 +14,27 @@ const WEBRTC_MIN_PORT = parseInt(process.env.WEBRTC_MIN_PORT || '40000', 10);
 const WEBRTC_MAX_PORT = parseInt(process.env.WEBRTC_MAX_PORT || '49999', 10);
 const TEST_AUTH_BYPASS = String(process.env.TEST_AUTH_BYPASS || '').toLowerCase() === 'true';
 
+// Your friend’s backend base (used for /streams/start, /streams/stop, /streams/active)
+const AUTH_BASE = process.env.AUTH_BASE || 'https://livenix.duckdns.org/api';
+
+// ---------------- Small HTTP helpers ----------------
+async function getFetch() {
+  if (typeof fetch === 'function') return fetch;
+  const { default: nodeFetch } = await import('node-fetch');
+  return nodeFetch;
+}
+async function httpJSON(url, options = {}) {
+  const f = await getFetch();
+  const r = await f(url, {
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options
+  });
+  let j = {};
+  try { j = await r.json(); } catch {}
+  if (!r.ok) throw new Error(j?.message || `HTTP ${r.status}`);
+  return j;
+}
+
 // ---------------- App / Socket ----------------
 const app = express();
 app.use(express.json());
@@ -22,10 +43,15 @@ app.use(express.urlencoded({ extended: false }));
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    // Allow local dev + your domain (safe to expand if needed)
+    origin: [
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      'https://livenix.htetaungthant.com'
+    ],
     methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  },
+    allowedHeaders: ['Content-Type', 'Authorization']
+  }
 });
 
 // ---------------- Mediasoup core ----------------
@@ -40,9 +66,9 @@ const mediaCodecs = [
     parameters: {
       'level-asymmetry-allowed': 1,
       'packetization-mode': 1,
-      'profile-level-id': '42e01f',
-    },
-  },
+      'profile-level-id': '42e01f'
+    }
+  }
 ];
 
 (async () => {
@@ -57,6 +83,7 @@ const mediaCodecs = [
     console.log(`✅ Server listening on http://0.0.0.0:${PORT}`);
     console.log(`🌐 ANNOUNCED_IP = ${ANNOUNCED_IP}`);
     if (TEST_AUTH_BYPASS) console.log('⚠️ TEST_AUTH_BYPASS is ON — all requests are auto-authorized.');
+    console.log(`🔗 Friend API base = ${AUTH_BASE}`);
   });
 })();
 
@@ -65,7 +92,7 @@ async function createWebRtcTransport() {
     listenIps: [{ ip: '0.0.0.0', announcedIp: ANNOUNCED_IP }],
     enableUdp: true,
     enableTcp: true,
-    preferUdp: true,
+    preferUdp: true
   });
 }
 
@@ -91,7 +118,7 @@ function ensureLiveState(liveId) {
       audioProducer: null,
       roomName: `live:${liveId}`,
       consumersBySocket: new Map(),
-      videoConsumerBySocket: new Map(),
+      videoConsumerBySocket: new Map()
     };
   }
   return live.state;
@@ -118,7 +145,9 @@ function requireAuthHeader(req, res, next) {
 }
 
 // ---------------- REST: Lives ----------------
-app.post('/api/lives', requireAuthHeader, (req, res) => {
+
+// Create live (and sync to friend backend: POST /streams/start)
+app.post('/api/lives', requireAuthHeader, async (req, res) => {
   const { title, description } = req.body || {};
   const id = randomUUID();
   const slug = makeSlug(title || 'live');
@@ -131,49 +160,96 @@ app.post('/api/lives', requireAuthHeader, (req, res) => {
     isLive: true,
     createdAt: new Date().toISOString(),
     endedAt: null,
-    state: null,
+    state: null
   };
   lives.set(id, live);
   ensureLiveState(id);
+
+  // 🔗 Notify friend backend that this stream started
+  try {
+    await httpJSON(`${AUTH_BASE}/streams/start`, {
+      method: 'POST',
+      body: JSON.stringify({
+        id: live.id,
+        slug: live.slug,
+        title: live.title,
+        user: live.hostUserId,
+        viewer_url: `https://${req.headers.host}/viewer.html?slug=${live.slug}`
+      })
+    });
+    // Optional: emit a push event for your own clients (for real-time lists)
+    io.emit('streams:changed', { type: 'start', id: live.id, slug: live.slug, title: live.title });
+  } catch (e) {
+    console.warn('⚠️ Failed to sync /streams/start:', e.message);
+  }
+
   res.json(live);
 });
 
-app.get('/api/lives', requireAuthHeader, (_req, res) => {
-  const list = Array.from(lives.values())
-    .filter((l) => l.isLive)
-    .map((l) => ({
-      id: l.id,
-      slug: l.slug,
-      title: l.title,
-      description: l.description,
-      createdAt: l.createdAt,
+// Active lives list
+// Option A (current in-memory): keep your own list
+// Option B (proxy friend backend): uncomment the block below to make /api/lives read from /streams/active
+app.get('/api/lives', requireAuthHeader, async (_req, res) => {
+  // --- Option B: use friend backend as source of truth ---
+  try {
+    const actives = await httpJSON(`${AUTH_BASE}/streams/active`);
+    // Map fields to the shape your UI expects
+    const mapped = (Array.isArray(actives) ? actives : []).map(s => ({
+      id: s.id || s._id || s.slug, // fallback if their id differs
+      slug: s.slug,
+      title: s.title || 'Untitled Live',
+      description: s.description || null,
+      createdAt: s.createdAt || new Date().toISOString()
     }));
-  res.json(list);
+    return res.json(mapped);
+  } catch (err) {
+    console.warn('⚠️ streams/active failed, falling back to local list:', err.message);
+    // --- Fallback to local in-memory list ---
+    const list = Array.from(lives.values())
+      .filter((l) => l.isLive)
+      .map((l) => ({
+        id: l.id,
+        slug: l.slug,
+        title: l.title,
+        description: l.description,
+        createdAt: l.createdAt
+      }));
+    return res.json(list);
+  }
 });
 
-app.patch('/api/lives/:id/end', requireAuthHeader, (req, res) => {
+// End (stop) a live (and sync to friend backend: POST /streams/stop)
+app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
   const live = lives.get(req.params.id);
   if (!live) return res.status(404).json({ error: 'Not found' });
+
   live.isLive = false;
   live.endedAt = new Date().toISOString();
+
+  // Close mediasoup things
   if (live.state) {
     try {
       for (const [, t] of live.state.transports) {
-        try {
-          t.send?.close();
-        } catch {}
-        try {
-          t.recv?.close();
-        } catch {}
+        try { t.send?.close(); } catch {}
+        try { t.recv?.close(); } catch {}
       }
-      try {
-        live.state.videoProducer?.close();
-      } catch {}
-      try {
-        live.state.audioProducer?.close();
-      } catch {}
+      try { live.state.videoProducer?.close(); } catch {}
+      try { live.state.audioProducer?.close(); } catch {}
     } catch {}
   }
+
+  // 🔗 Notify friend backend that this stream stopped
+  try {
+    await httpJSON(`${AUTH_BASE}/streams/stop`, {
+      method: 'POST',
+      body: JSON.stringify({ id: live.id, slug: live.slug })
+    });
+    // Optional push
+    io.emit('streams:changed', { type: 'stop', id: live.id, slug: live.slug });
+  } catch (e) {
+    console.warn('⚠️ Failed to sync /streams/stop:', e.message);
+  }
+
   res.json({ ok: true });
 });
 
@@ -220,6 +296,7 @@ io.on('connection', (socket) => {
 
   socket.on('getRtpCapabilities', (_payload, cb) => ok(cb, router.rtpCapabilities));
 
+  // ---- Broadcaster (send)
   socket.on('createSendTransport', async (_payload, cb) => {
     try {
       if (!socket.data.isHost) return errAck(cb, 'not host');
@@ -272,6 +349,7 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ---- Viewer (recv)
   socket.on('createRecvTransport', async (_payload, cb) => {
     try {
       const t = await createWebRtcTransport();
@@ -361,4 +439,4 @@ io.on('connection', (socket) => {
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
-});
+});cl
