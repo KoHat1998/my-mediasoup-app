@@ -5,209 +5,191 @@
   <title>KoHat Live Player</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    html, body { margin:0; padding:0; height:100%; width:100%; background:#000; overflow:hidden; }
-    #stage { position:relative; height:100%; width:100%; }
+    html, body { margin:0; padding:0; background:#000; height:100%; width:100%; overflow:hidden; }
     video { width:100%; height:100%; object-fit:contain; background:#000; }
-    #status { position:absolute; top:10px; left:10px; padding:6px 10px; background:rgba(0,0,0,.7);
-              color:#fff; font:14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial; border-radius:6px; }
-    #status.error { background:#8a1f1f; }
-    #status.live  { background:#c62828; }
+    #status {
+      position:absolute; top:10px; left:10px; z-index:10;
+      padding:4px 8px; border-radius:4px; color:#fff; font:14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background:rgba(0,0,0,.7);
+    }
   </style>
 </head>
 <body>
-  <div id="stage">
-    <video id="video" autoplay playsinline></video>
-    <div id="status">Player ready. Waiting for app…</div>
+  <div style="position:relative;width:100%;height:100%;">
+    <video id="remoteVideo" autoplay playsinline></video>
+    <span id="status">Player ready. Waiting for init…</span>
   </div>
 
-  <!-- Socket.IO client (served by your Node app at /socket.io/socket.io.js) -->
   <script src="/socket.io/socket.io.js"></script>
-  <!-- mediasoup-client (ESM import) -->
   <script type="module">
     import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
-    const $video  = document.getElementById('video');
-    const $status = document.getElementById('status');
+    const statusEl = document.getElementById('status');
+    const videoEl  = document.getElementById('remoteVideo');
 
-    function setStatus(text, cls='') {
-      $status.className = cls;
-      $status.textContent = text;
-      // also let Flutter know
+    // -------- small helpers ----------
+    function setStatus(msg, type='info') {
+      statusEl.textContent = msg;
+      statusEl.style.backgroundColor =
+        type === 'live'  ? '#b00020' :
+        type === 'error' ? '#6a1b1a' : 'rgba(0,0,0,.7)';
       if (window.flutter_inappwebview?.callHandler) {
-        window.flutter_inappwebview.callHandler('playerStatus', { text, cls }).catch(()=>{});
+        window.flutter_inappwebview.callHandler('playerStatus', { message: msg, type });
       }
+      console.log('[PLAYER]', msg);
     }
+    const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
-    function qs(name, fallback='') {
-      const v = new URLSearchParams(location.search).get(name);
-      return v ?? fallback;
-    }
+    // -------- mediasoup state ----------
+    let socket;
+    let device;
+    let recvTransport;
+    let videoConsumer, audioConsumer;
+    const mediaStream = new MediaStream();
+    videoEl.srcObject = mediaStream;
 
-    let socket = null;
-    let device = null;
-    let recvTransport = null;
-    let videoConsumer = null;
-    let audioConsumer = null;
-
-    async function connectSocket(host, { token, role, slug, liveId }) {
-      return new Promise((resolve, reject) => {
-        try {
-          socket = io(host, {
-            path: '/socket.io',
-            transports: ['websocket'],
-            auth: { token, role, slug, liveId }
-          });
-
-          socket.once('connect', () => resolve());
-          socket.once('connect_error', (e) => reject(e));
-
-          // generic listeners
-          socket.on('error', (m) => setStatus(`Server error: ${m}`, 'error'));
-          socket.on('disconnect', (r) => setStatus(`Disconnected: ${r}`, ''));
-        } catch (e) {
-          reject(e);
-        }
-      });
+    function attachTrack(kind, track){
+      const old = kind==='video' ? mediaStream.getVideoTracks()[0] : mediaStream.getAudioTracks()[0];
+      if (old) mediaStream.removeTrack(old);
+      mediaStream.addTrack(track);
     }
 
     async function loadDevice() {
-      const caps = await new Promise((res, rej) =>
-        socket.emit('getRtpCapabilities', null, (ans) => ans?.error ? rej(ans.error) : res(ans))
-      );
+      const caps = await new Promise(res => socket.emit('getRtpCapabilities', res));
       device = new mediasoupClient.Device();
       await device.load({ routerRtpCapabilities: caps });
     }
 
     async function createRecvTransport() {
-      const info = await new Promise((res, rej) =>
-        socket.emit('createRecvTransport', null, (ans) => ans?.error ? rej(ans.error) : res(ans))
-      );
-      recvTransport = device.createRecvTransport(info);
-      recvTransport.on('connect', ({ dtlsParameters }, cb, eb) => {
-        socket.emit('connectRecvTransport', { dtlsParameters }, (ans) => ans?.error ? eb(ans.error) : cb());
+      const params = await new Promise(res => socket.emit('createRecvTransport', {}, res));
+      if (params?.error) throw new Error(params.error);
+      const t = device.createRecvTransport(params);
+      t.on('connect', ({ dtlsParameters }, cb, eb) => {
+        socket.emit('connectRecvTransport', { dtlsParameters }, (r) => r==='ok' ? cb() : eb(new Error('connectRecvTransport failed')));
       });
+      return t;
     }
 
-    function attachTrack(kind, track) {
-      const stream = $video.srcObject instanceof MediaStream ? $video.srcObject : new MediaStream();
-      if (kind === 'video') {
-        const old = stream.getVideoTracks()[0]; if (old) stream.removeTrack(old);
-      } else {
-        const old = stream.getAudioTracks()[0]; if (old) stream.removeTrack(old);
+    async function consumeKind(kind) {
+      const data = await new Promise(res => socket.emit('consume', { rtpCapabilities: device.rtpCapabilities, kind }, res));
+      if (data?.error) {
+        console.log(`No ${kind} yet:`, data.error);
+        return null;
       }
-      stream.addTrack(track);
-      if (!$video.srcObject) $video.srcObject = stream;
+      const c = await recvTransport.consume(data);
+      attachTrack(kind, c.track);
+      await new Promise(res => socket.emit('resume', { consumerId: c.id }, res));
+      return c;
     }
 
-    async function consume(kind) {
-      const data = await new Promise((res, rej) =>
-        socket.emit('consume',
-          { rtpCapabilities: device.rtpCapabilities, kind },
-          (ans) => ans?.error ? rej(ans.error) : res(ans)
-        )
-      );
-      const consumer = await recvTransport.consume(data);
-      attachTrack(kind, consumer.track);
-      await new Promise((res, rej) =>
-        socket.emit('resume', { consumerId: consumer.id }, (ans) => ans?.error ? rej(ans.error) : res(ans))
-      );
-      return consumer;
-    }
-
-    function wireServerEvents() {
-      // server emits: io.to(room).emit('newProducer', { kind, slug })
-      socket.on('newProducer', async ({ kind }) => {
-        try {
-          if (kind === 'video') { try { videoConsumer?.close(); } catch {} videoConsumer = await consume('video'); }
-          if (kind === 'audio') { try { audioConsumer?.close(); } catch {} audioConsumer = await consume('audio'); }
-          setStatus('LIVE', 'live');
-        } catch (e) {
-          console.warn('Re-consume failed:', e);
-        }
-      });
-
-      // viewer count: io.to(room).emit('viewers', count)
-      socket.on('viewers', (n) => {
-        if (Number.isFinite(n)) {
-          // optional: display somewhere; we’ll keep the status unchanged
-          if (window.flutter_inappwebview?.callHandler) {
-            window.flutter_inappwebview.callHandler('viewerCountChanged', { count: n }).catch(()=>{});
-          }
-        }
-      });
-    }
-
-    async function start(optsFromFlutter) {
-      // 1) Merge URL params + Flutter opts
-      const host   = (optsFromFlutter?.host || location.origin).replace(/\/+$/, '');
-      const role   = optsFromFlutter?.role || qs('role', 'viewer');
-      const token  = optsFromFlutter?.token || qs('token', '');
-      const slug   = optsFromFlutter?.slug || qs('slug', '');
-      const liveId = optsFromFlutter?.liveId || qs('liveId', '') || qs('id','') || qs('room','') || qs('ch','');
-
-      if (!slug && !liveId) {
-        setStatus('No slug/liveId provided.', 'error');
-        throw new Error('missing slug/liveId');
-      }
-
-      // 2) Connect socket with auth required by server
-      setStatus('Connecting…');
-      await connectSocket(host, { token, role, slug, liveId });
-      wireServerEvents();
-
-      // 3) mediasoup recv flow
-      await loadDevice();
-      await createRecvTransport();
-
-      // 4) Try consume video then audio
-      try { videoConsumer = await consume('video'); } catch { /* wait for producer */ }
-      try { audioConsumer = await consume('audio'); } catch { /* optional */ }
-
-      if (videoConsumer || audioConsumer) {
-        setStatus(videoConsumer ? 'LIVE' : 'Audio Only', 'live');
-      } else {
-        setStatus('Waiting for broadcaster…');
-      }
-
-      // let Flutter know we’re ready
-      if (window.flutter_inappwebview?.callHandler) {
-        window.flutter_inappwebview.callHandler('streamState', {
-          live: !!(videoConsumer || audioConsumer),
-          hasVideo: !!videoConsumer,
-          hasAudio: !!audioConsumer
-        }).catch(()=>{});
-      }
-    }
-
-    // Expose a small bridge for Flutter
+    // -------- public bridge for Flutter ----------
     window.playerBridge = {
-      async init(opts) {
+      /**
+       * options: { host, token?, role='viewer', channelId?, slug?, liveId? }
+       * We will send {role, token, slug, liveId} in Socket.IO handshake (what your Node expects).
+       */
+      async init(options) {
         try {
-          await start(opts || {});
-          return { ok:true };
+          if (!options?.host) throw new Error('host required');
+          // Accept id under multiple keys; your Node accepts either slug or liveId
+          const channel = options.channelId || options.slug || options.liveId || options.id || options.room || options.ch;
+          if (!channel) throw new Error('channelId/slug/liveId required');
+
+          // Normalize auth for handshake (Node middleware will add "Bearer" prefix if missing)
+          const rawToken = options.token || (new URL(location.href)).searchParams.get('token') || '';
+          const slug     = channel;   // treat the same value as slug
+          const liveId   = channel;   // and as liveId (server will match either)
+
+          // Create socket with handshake auth — THIS is the key change
+          setStatus('Connecting…');
+          socket = io(options.host, {
+            transports: ['websocket','polling'],
+            auth: {
+              role: options.role || 'viewer',
+              token: rawToken,  // can be raw "eyJ…" or "Bearer eyJ…" — server normalizes
+              slug,
+              liveId
+            }
+          });
+
+          // connection lifecycle
+          socket.on('connect', () => setStatus('Connected. Preparing device…'));
+          socket.on('connect_error', (err) => setStatus(`Socket connection error: ${err.message}`, 'error'));
+          socket.on('disconnect', (r) => setStatus(`Disconnected: ${r}`));
+
+          // broadcaster appears later? re-consume on demand
+          socket.on('newProducer', async ({ kind, slug: s }) => {
+            // your server sends {kind, slug}; we don’t filter by slug here
+            try {
+              if (!device || !device.loaded || !recvTransport) return;
+              const c = await consumeKind(kind);
+              if (kind === 'video') { videoConsumer?.close(); videoConsumer = c; }
+              else                  { audioConsumer?.close(); audioConsumer = c; }
+              setStatus('LIVE', 'live');
+            } catch (e) { console.error('reconsume failed', e); }
+          });
+
+          // wait until socket connected
+          await new Promise((resolve, reject) => {
+            if (socket.connected) return resolve();
+            const onOk = () => { cleanup(); resolve(); };
+            const onBad = (e) => { cleanup(); reject(e); };
+            const cleanup = () => {
+              socket.off('connect', onOk);
+              socket.off('connect_error', onBad);
+            };
+            socket.once('connect', onOk);
+            socket.once('connect_error', onBad);
+          });
+
+          // mediasoup pipeline
+          await loadDevice();
+          recvTransport = await createRecvTransport();
+
+          videoConsumer = await consumeKind('video');
+          audioConsumer = await consumeKind('audio');
+
+          if (videoConsumer || audioConsumer) {
+            setStatus(videoConsumer ? 'LIVE' : 'Audio only', 'live');
+          } else {
+            setStatus('Waiting for broadcaster…');
+          }
+
+          // Some devices only expose dimensions later
+          await sleep(500);
+          if (window.flutter_inappwebview?.callHandler) {
+            window.flutter_inappwebview.callHandler('videoResolutionChanged', {
+              width:  videoEl.videoWidth  || 0,
+              height: videoEl.videoHeight || 0
+            });
+          }
+
+          return { ok: true };
         } catch (e) {
-          setStatus(String(e?.message || e), 'error');
-          return { ok:false, error:String(e?.message || e) };
+          console.error(e);
+          setStatus(e.message || 'init failed', 'error');
+          return { ok: false, error: String(e) };
         }
       },
       async enterFullscreen() {
-        try { await $video.requestFullscreen?.(); } catch {}
-        return { ok:true };
+        if (videoEl.requestFullscreen) await videoEl.requestFullscreen().catch(()=>{});
+        return { ok: true };
       },
       async exitFullscreen() {
-        try { if (document.fullscreenElement) await document.exitFullscreen(); } catch {}
-        return { ok:true };
+        if (document.fullscreenElement) await document.exitFullscreen().catch(()=>{});
+        return { ok: true };
       }
     };
 
-    // video dimension signals back to Flutter (optional)
-    $video.onloadedmetadata = () => {
-      const w = $video.videoWidth, h = $video.videoHeight;
+    // report resize to Flutter (optional)
+    videoEl.onloadedmetadata = () => {
       if (window.flutter_inappwebview?.callHandler) {
-        window.flutter_inappwebview.callHandler('videoResolutionChanged', { width:w, height:h }).catch(()=>{});
+        window.flutter_inappwebview.callHandler('videoResolutionChanged', {
+          width: videoEl.videoWidth, height: videoEl.videoHeight
+        });
       }
     };
-
+    videoEl.onresize = videoEl.onloadedmetadata;
   </script>
 </body>
 </html>
