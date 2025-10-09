@@ -13,6 +13,8 @@ const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '52.62.49.247';
 const WEBRTC_MIN_PORT = parseInt(process.env.WEBRTC_MIN_PORT || '40000', 10);
 const WEBRTC_MAX_PORT = parseInt(process.env.WEBRTC_MAX_PORT || '49999', 10);
 const TEST_AUTH_BYPASS = String(process.env.TEST_AUTH_BYPASS || '').toLowerCase() === 'true';
+
+// Your friend’s backend base (used for /login, /streams/start, /streams/stop, /streams/active)
 const AUTH_BASE = process.env.AUTH_BASE || 'https://livenix.duckdns.org/api';
 
 // ---------------- Small HTTP helpers ----------------
@@ -21,16 +23,58 @@ async function getFetch() {
   const { default: nodeFetch } = await import('node-fetch');
   return nodeFetch;
 }
+
 async function httpJSON(url, options = {}) {
+  // JSON helper (GET/JSON endpoints)
   const f = await getFetch();
   const r = await f(url, {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options
   });
-  let j = {};
-  try { j = await r.json(); } catch {}
-  if (!r.ok) throw new Error(j?.message || `HTTP ${r.status}`);
-  return j;
+
+  let data, text;
+  try { data = await r.json(); }
+  catch { try { text = await r.text(); } catch { text = '<no body>'; } }
+
+  if (!r.ok) {
+    const msg = (data && (data.message || data.error)) || text || `HTTP ${r.status}`;
+    throw new Error(`HTTP ${r.status} – ${msg}`);
+  }
+  return data ?? {};
+}
+
+// ---- FormData helper for friend API (start/stop expect multipart/form-data) ----
+async function httpForm(url, fields = {}, headers = {}) {
+  const f = await getFetch();
+
+  // Node 18+ has global FormData; Node 16 fallback to form-data
+  let FormDataCtor = typeof FormData !== 'undefined' ? FormData : null;
+  if (!FormDataCtor) {
+    const mod = await import('form-data');
+    FormDataCtor = mod.default;
+  }
+  const form = new FormDataCtor();
+  Object.entries(fields).forEach(([k, v]) => form.append(k, v));
+
+  const r = await f(url, {
+    method: 'POST',
+    headers: {
+      // IMPORTANT: don't set Content-Type manually for FormData
+      Accept: 'application/json',
+      ...headers
+    },
+    body: form
+  });
+
+  let data, text;
+  try { data = await r.json(); }
+  catch { try { text = await r.text(); } catch { text = '<no body>'; } }
+
+  if (!r.ok) {
+    const msg = (data && (data.message || data.error)) || text || `HTTP ${r.status}`;
+    throw new Error(`HTTP ${r.status} – ${msg}`);
+  }
+  return data ?? {};
 }
 
 // ---------------- App / Socket ----------------
@@ -41,6 +85,7 @@ app.use(express.urlencoded({ extended: false }));
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
+    // Allow local dev + your domain
     origin: [
       'http://localhost:3000',
       'http://127.0.0.1:3000',
@@ -143,7 +188,7 @@ function requireAuthHeader(req, res, next) {
 
 // ---------------- REST: Lives ----------------
 
-// Create live (and sync to friend backend: POST /streams/start)
+// Create live (and sync to friend backend: POST /streams/start with FormData)
 app.post('/api/lives', requireAuthHeader, async (req, res) => {
   const { title, description } = req.body || {};
   const id = randomUUID();
@@ -162,18 +207,15 @@ app.post('/api/lives', requireAuthHeader, async (req, res) => {
   lives.set(id, live);
   ensureLiveState(id);
 
-  // 🔗 Notify friend backend that this stream started
+  // 🔗 Notify friend backend that this stream started using multipart/form-data
   try {
-    await httpJSON(`${AUTH_BASE}/streams/start`, {
-      method: 'POST',
-      body: JSON.stringify({
-        id: live.id,
-        slug: live.slug,
-        title: live.title,
-        user: live.hostUserId,
-        viewer_url: `https://${req.headers.host}/viewer.html?slug=${live.slug}`
-      })
-    });
+    await httpForm(`${AUTH_BASE}/streams/start`,
+      {
+        stream_id: live.id,         // REQUIRED by friend API
+        title: live.title           // REQUIRED by friend API
+      },
+      { Authorization: req.user?.raw || '' } // forward Bearer token
+    );
     io.emit('streams:changed', { type: 'start', id: live.id, slug: live.slug, title: live.title });
   } catch (e) {
     console.warn('⚠️ Failed to sync /streams/start:', e.message);
@@ -182,13 +224,15 @@ app.post('/api/lives', requireAuthHeader, async (req, res) => {
   res.json(live);
 });
 
-// Active lives list — sync with friend backend if available
+// Active lives list — try friend backend first, fallback to local memory
 app.get('/api/lives', requireAuthHeader, async (_req, res) => {
   try {
-    const actives = await httpJSON(`${AUTH_BASE}/streams/active`);
+    const actives = await httpJSON(`${AUTH_BASE}/streams/active`, {
+      headers: { Authorization: _req.user?.raw || '' }
+    });
     const mapped = (Array.isArray(actives) ? actives : []).map(s => ({
-      id: s.id || s._id || s.slug,
-      slug: s.slug,
+      id: s.id || s.stream_id || s._id || s.slug || 'unknown',
+      slug: s.slug || s.stream_id || s.id,
       title: s.title || 'Untitled Live',
       description: s.description || null,
       createdAt: s.createdAt || new Date().toISOString()
@@ -209,7 +253,7 @@ app.get('/api/lives', requireAuthHeader, async (_req, res) => {
   }
 });
 
-// End (stop) a live (and sync to friend backend: POST /streams/stop)
+// End (stop) a live (and sync to friend backend: POST /streams/stop with FormData)
 app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
   const live = lives.get(req.params.id);
   if (!live) return res.status(404).json({ error: 'Not found' });
@@ -229,12 +273,12 @@ app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
     } catch {}
   }
 
-  // 🔗 Notify friend backend that this stream stopped
+  // 🔗 Notify friend backend that this stream stopped using multipart/form-data
   try {
-    await httpJSON(`${AUTH_BASE}/streams/stop`, {
-      method: 'POST',
-      body: JSON.stringify({ id: live.id, slug: live.slug })
-    });
+    await httpForm(`${AUTH_BASE}/streams/stop`,
+      { stream_id: live.id },                    // REQUIRED by friend API
+      { Authorization: req.user?.raw || '' }
+    );
     io.emit('streams:changed', { type: 'stop', id: live.id, slug: live.slug });
   } catch (e) {
     console.warn('⚠️ Failed to sync /streams/stop:', e.message);
@@ -246,7 +290,7 @@ app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
 // ---------------- Static Routes ----------------
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/', (_req, res) => res.redirect('/lives.html'));
-app.use(express.static('public'));
+app.use(express.static('public')); // serves /signin.html, /signup.html, etc.
 
 // ---------------- Socket.IO ----------------
 io.use((socket, next) => {
