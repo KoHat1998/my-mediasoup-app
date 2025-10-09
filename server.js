@@ -226,31 +226,17 @@ app.post('/api/lives', requireAuthHeader, async (req, res) => {
 
 // Active lives list — try friend backend first, fallback to local memory
 app.get('/api/lives', requireAuthHeader, async (_req, res) => {
-  try {
-    const actives = await httpJSON(`${AUTH_BASE}/streams/active`, {
-      headers: { Authorization: _req.user?.raw || '' }
-    });
-    const mapped = (Array.isArray(actives) ? actives : []).map(s => ({
-      id: s.id || s.stream_id || s._id || s.slug || 'unknown',
-      slug: s.slug || s.stream_id || s.id,
-      title: s.title || 'Untitled Live',
-      description: s.description || null,
-      createdAt: s.createdAt || new Date().toISOString()
+  // Always use the local 'lives' map as the source of truth.
+  const list = Array.from(lives.values())
+    .filter((l) => l.isLive)
+    .map((l) => ({
+      id: l.id,
+      slug: l.slug,
+      title: l.title,
+      description: l.description,
+      createdAt: l.createdAt
     }));
-    return res.json(mapped);
-  } catch (err) {
-    console.warn('⚠️ streams/active failed, falling back to local list:', err.message);
-    const list = Array.from(lives.values())
-      .filter((l) => l.isLive)
-      .map((l) => ({
-        id: l.id,
-        slug: l.slug,
-        title: l.title,
-        description: l.description,
-        createdAt: l.createdAt
-      }));
-    return res.json(list);
-  }
+  return res.json(list);
 });
 
 // End (stop) a live (and sync to friend backend: POST /streams/stop with FormData)
