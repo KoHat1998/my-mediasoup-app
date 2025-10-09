@@ -25,7 +25,6 @@ async function getFetch() {
 }
 
 async function httpJSON(url, options = {}) {
-  // JSON helper (GET/JSON endpoints)
   const f = await getFetch();
   const r = await f(url, {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
@@ -59,7 +58,6 @@ async function httpForm(url, fields = {}, headers = {}) {
   const r = await f(url, {
     method: 'POST',
     headers: {
-      // IMPORTANT: don't set Content-Type manually for FormData
       Accept: 'application/json',
       ...headers
     },
@@ -85,7 +83,6 @@ app.use(express.urlencoded({ extended: false }));
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    // Allow local dev + your domain
     origin: [
       'http://localhost:3000',
       'http://127.0.0.1:3000',
@@ -207,14 +204,10 @@ app.post('/api/lives', requireAuthHeader, async (req, res) => {
   lives.set(id, live);
   ensureLiveState(id);
 
-  // 🔗 Notify friend backend that this stream started using multipart/form-data
   try {
     await httpForm(`${AUTH_BASE}/streams/start`,
-      {
-        stream_id: live.id,         // REQUIRED by friend API
-        title: live.title           // REQUIRED by friend API
-      },
-      { Authorization: req.user?.raw || '' } // forward Bearer token
+      { stream_id: live.id, title: live.title },
+      { Authorization: req.user?.raw || '' }
     );
     io.emit('streams:changed', { type: 'start', id: live.id, slug: live.slug, title: live.title });
   } catch (e) {
@@ -224,9 +217,8 @@ app.post('/api/lives', requireAuthHeader, async (req, res) => {
   res.json(live);
 });
 
-// Active lives list — try friend backend first, fallback to local memory
+// Active lives list (local memory is the source of truth)
 app.get('/api/lives', requireAuthHeader, async (_req, res) => {
-  // Always use the local 'lives' map as the source of truth.
   const list = Array.from(lives.values())
     .filter((l) => l.isLive)
     .map((l) => ({
@@ -247,7 +239,6 @@ app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
   live.isLive = false;
   live.endedAt = new Date().toISOString();
 
-  // Close mediasoup resources
   if (live.state) {
     try {
       for (const [, t] of live.state.transports) {
@@ -259,10 +250,9 @@ app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
     } catch {}
   }
 
-  // 🔗 Notify friend backend that this stream stopped using multipart/form-data
   try {
     await httpForm(`${AUTH_BASE}/streams/stop`,
-      { stream_id: live.id },                    // REQUIRED by friend API
+      { stream_id: live.id },
       { Authorization: req.user?.raw || '' }
     );
     io.emit('streams:changed', { type: 'stop', id: live.id, slug: live.slug });
@@ -278,10 +268,176 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/', (_req, res) => res.redirect('/lives.html'));
 app.use(express.static('public')); // serves /signin.html, /signup.html, etc.
 
+/* ---------------- Inline viewer routes ----------------
+   These serve a minimal mediasoup-client + Socket.IO viewer at:
+   - /player_only.html
+   - /viewer
+   - /viewer.html
+
+   Accepts any of: ?slug=, ?liveId=, ?id=, ?room=, ?ch=
+   Optional: ?token= (Bearer or raw); ignored if TEST_AUTH_BYPASS=true
+------------------------------------------------------- */
+const PLAYER_HTML = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>KoHat Live Viewer</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial; }
+    .wrap { display:flex; flex-direction:column; min-height:100vh; }
+    header { padding:10px 14px; border-bottom:1px solid #00000022; display:flex; align-items:center; gap:10px; }
+    header h1 { margin:0; font-size:16px; font-weight:600; }
+    main { flex:1; display:flex; align-items:center; justify-content:center; padding:10px; }
+    video { width: min(100vw, 100%); max-height: 70vh; background:#000; border-radius:10px; }
+    .row { display:flex; gap:8px; align-items:center; }
+    .pill { padding:4px 8px; border-radius:999px; font-size:12px; background:#2563eb; color:white; }
+    .err { color:#ef4444; font-weight:600; }
+    footer { padding:8px 14px; border-top:1px solid #00000022; display:flex; justify-content:space-between; align-items:center; font-size:12px; opacity:.8;}
+    .muted { opacity:.7 }
+    button { padding:8px 12px; border-radius:8px; border:1px solid #00000022; background:#111827; color:white; cursor:pointer;}
+    button:disabled{ opacity:.5; cursor:not-allowed;}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="row"><span class="pill" id="status">Idle</span></div>
+    <h1 id="title">Viewer</h1>
+    <div style="margin-left:auto" class="muted" id="info"></div>
+  </header>
+  <main>
+    <video id="video" playsinline autoplay muted controls></video>
+  </main>
+  <footer>
+    <div class="muted">Press play if your browser blocks autoplay.</div>
+    <div><button id="unmute">Unmute</button></div>
+  </footer>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script type="module">
+  import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
+
+  const qs = new URLSearchParams(location.search);
+  const ident = qs.get('slug') || qs.get('liveId') || qs.get('id') || qs.get('room') || qs.get('ch') || '';
+  const token = qs.get('token') || ''; // optional
+
+  const $status = document.getElementById('status');
+  const $title  = document.getElementById('title');
+  const $info   = document.getElementById('info');
+  const $video  = document.getElementById('video');
+  const $unmute = document.getElementById('unmute');
+
+  $title.textContent = 'Viewer: ' + (ident || '(no id)');
+  $info.textContent = location.host;
+
+  function setStatus(s, bad=false){
+    $status.textContent = s;
+    $status.style.background = bad ? '#ef4444' : '#2563eb';
+  }
+
+  if (!ident) {
+    setStatus('Missing id/slug', true);
+    throw new Error('Provide ?slug= or ?liveId= or ?id= or ?room=');
+  }
+
+  setStatus('Connecting…');
+  const socket = io('/', {
+    transports: ['websocket'],
+    auth: {
+      role: 'viewer',
+      token: token ? (/^Bearer\\s+/i.test(token) ? token : 'Bearer ' + token) : undefined,
+      slug: ident,
+      liveId: ident
+    }
+  });
+
+  socket.on('connect', async () => {
+    try {
+      setStatus('Loading caps…');
+      const rtpCaps = await emitAck('getRtpCapabilities', null);
+
+      const device = new mediasoupClient.Device();
+      await device.load({ routerRtpCapabilities: rtpCaps });
+
+      setStatus('Creating transport…');
+      const tInfo = await emitAck('createRecvTransport', null);
+      const recvTransport = device.createRecvTransport(tInfo);
+
+      recvTransport.on('connect', ({ dtlsParameters }, cb, err) => {
+        emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err);
+      });
+
+      async function consumeKind(kind) {
+        const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
+        if (res?.error) throw new Error(res.error);
+        const consumer = await recvTransport.consume({
+          id: res.id,
+          producerId: res.producerId,
+          kind: res.kind,
+          rtpParameters: res.rtpParameters
+        });
+        const ms = new MediaStream([consumer.track]);
+        if (kind === 'video') $video.srcObject = ms;
+        await emitAck('resume', { consumerId: consumer.id });
+        return consumer;
+      }
+
+      setStatus('Starting video…');
+      try { await consumeKind('video'); } catch(e){ console.warn('video:', e); }
+
+      setStatus('Starting audio…');
+      try { await consumeKind('audio'); } catch(e){ console.warn('audio:', e); }
+
+      setStatus('LIVE');
+
+      socket.on('newProducer', async (p) => {
+        try {
+          if (p.kind === 'video') { await consumeKind('video'); }
+          if (p.kind === 'audio') { await consumeKind('audio'); }
+        } catch(e) { console.warn('newProducer consume failed:', e); }
+      });
+
+    } catch (e) {
+      console.error(e);
+      setStatus('Error', true);
+      alert('Viewer error: ' + (e?.message || e));
+    }
+  });
+
+  socket.on('connect_error', (e) => {
+    console.error('connect_error', e);
+    setStatus('Connect error', true);
+  });
+
+  function emitAck(event, payload){
+    return new Promise((resolve, reject) => {
+      socket.timeout(8000).emit(event, payload, (res) => {
+        if (res && res.error) return reject(new Error(res.error));
+        resolve(res);
+      });
+    });
+  }
+
+  $unmute.addEventListener('click', async () => {
+    try {
+      $video.muted = false;
+      await $video.play().catch(()=>{});
+    } catch (_) {}
+  });
+</script>
+</body>
+</html>`;
+
+app.get(['/player_only.html', '/viewer', '/viewer.html'], (_req, res) => {
+  res.type('html').send(PLAYER_HTML);
+});
+
 // ---------------- Socket.IO ----------------
 io.use((socket, next) => {
   const { role, token: raw, liveId, slug } = socket.handshake.auth || {};
-  // Normalize token: accept "jwt" or "Bearer jwt"
   const token = raw ? (/^Bearer\s+/i.test(raw) ? raw : `Bearer ${raw}`) : '';
 
   if (!TEST_AUTH_BYPASS && !token) {
@@ -336,10 +492,7 @@ io.on('connection', (socket) => {
       const t = await createWebRtcTransport();
       state.transports.set(socket.id, { ...(state.transports.get(socket.id) || {}), send: t });
       ok(cb, { id: t.id, iceParameters: t.iceParameters, iceCandidates: t.iceCandidates, dtlsParameters: t.dtlsParameters });
-    } catch (e) {
-      console.error('createSendTransport', e);
-      errAck(cb, 'createSendTransport failed');
-    }
+    } catch (e) { console.error('createSendTransport', e); errAck(cb, 'createSendTransport failed'); }
   });
 
   socket.on('connectSendTransport', async ({ dtlsParameters }, cb) => {
@@ -349,10 +502,7 @@ io.on('connection', (socket) => {
       if (!t) return errAck(cb, 'no send transport');
       await t.connect({ dtlsParameters });
       ok(cb);
-    } catch (e) {
-      console.error('connectSendTransport', e);
-      errAck(cb, 'connectSendTransport failed');
-    }
+    } catch (e) { console.error('connectSendTransport', e); errAck(cb, 'connectSendTransport failed'); }
   });
 
   socket.on('produce', async ({ kind, rtpParameters }, cb) => {
@@ -376,10 +526,7 @@ io.on('connection', (socket) => {
       producer.on('close', () => { if (kind === 'video') state.videoProducer = null; else state.audioProducer = null; });
 
       ok(cb, { id: producer.id });
-    } catch (e) {
-      console.error('produce', e);
-      errAck(cb, 'produce failed');
-    }
+    } catch (e) { console.error('produce', e); errAck(cb, 'produce failed'); }
   });
 
   // ---- Viewer (recv)
@@ -388,10 +535,7 @@ io.on('connection', (socket) => {
       const t = await createWebRtcTransport();
       state.transports.set(socket.id, { ...(state.transports.get(socket.id) || {}), recv: t });
       ok(cb, { id: t.id, iceParameters: t.iceParameters, iceCandidates: t.iceCandidates, dtlsParameters: t.dtlsParameters });
-    } catch (e) {
-      console.error('createRecvTransport', e);
-      errAck(cb, 'createRecvTransport failed');
-    }
+    } catch (e) { console.error('createRecvTransport', e); errAck(cb, 'createRecvTransport failed'); }
   });
 
   socket.on('connectRecvTransport', async ({ dtlsParameters }, cb) => {
@@ -400,10 +544,7 @@ io.on('connection', (socket) => {
       if (!t) return errAck(cb, 'no recv transport');
       await t.connect({ dtlsParameters });
       ok(cb);
-    } catch (e) {
-      console.error('connectRecvTransport', e);
-      errAck(cb, 'connectRecvTransport failed');
-    }
+    } catch (e) { console.error('connectRecvTransport', e); errAck(cb, 'connectRecvTransport failed'); }
   });
 
   socket.on('consume', async ({ rtpCapabilities, kind }, cb) => {
@@ -421,10 +562,7 @@ io.on('connection', (socket) => {
       if (kind === 'video') state.videoConsumerBySocket.set(socket.id, c);
 
       ok(cb, { id: c.id, producerId: prod.id, kind: c.kind, rtpParameters: c.rtpParameters });
-    } catch (e) {
-      console.error('consume', e);
-      errAck(cb, 'consume failed');
-    }
+    } catch (e) { console.error('consume', e); errAck(cb, 'consume failed'); }
   });
 
   socket.on('resume', async ({ consumerId }, cb) => {
@@ -434,10 +572,7 @@ io.on('connection', (socket) => {
       if (!c) return errAck(cb, 'consumer not found');
       await c.resume();
       ok(cb);
-    } catch (e) {
-      console.error('resume', e);
-      errAck(cb, 'resume failed');
-    }
+    } catch (e) { console.error('resume', e); errAck(cb, 'resume failed'); }
   });
 
   socket.on('setPreferredLayers', async ({ spatialLayer = 2, temporalLayer = null }, cb) => {
@@ -446,10 +581,7 @@ io.on('connection', (socket) => {
       if (!c) return errAck(cb, 'no video consumer yet');
       await c.setPreferredLayers({ spatialLayer, temporalLayer });
       ok(cb);
-    } catch (e) {
-      console.error('setPreferredLayers', e);
-      errAck(cb, 'setPreferredLayers failed');
-    }
+    } catch (e) { console.error('setPreferredLayers', e); errAck(cb, 'setPreferredLayers failed'); }
   });
 
   socket.on('disconnect', () => {
