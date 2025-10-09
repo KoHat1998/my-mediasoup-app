@@ -4,23 +4,16 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 (() => {
   'use strict';
 
-  // --------- DOM helpers ---------
   const $ = (id) => document.getElementById(id);
-  const toast = (msg, t=1500) => {
-    const el = $('toast'); if (!el) return;
-    el.textContent = msg; el.style.display = 'block';
-    setTimeout(() => (el.style.display = 'none'), t);
-  };
+  const toast = (msg, t=1500) => { const el = $('toast'); if (!el) return; el.textContent = msg; el.style.display = 'block'; setTimeout(() => (el.style.display = 'none'), t); };
 
-  // Header actions
   $('browse').onclick = () => location.href = '/lives.html';
   $('signout').onclick = () => { localStorage.clear(); location.replace('/signin.html'); };
 
-  // --------- Auth guard ---------
-  const token = localStorage.getItem('token') || localStorage.getItem('authToken') || '';
-  if (!token) { location.replace('/signin.html'); return; }
+  const rawToken = localStorage.getItem('token') || localStorage.getItem('authToken') || '';
+  if (!rawToken) { location.replace('/signin.html'); return; }
+  const token = /^Bearer\s/i.test(rawToken) ? rawToken : `Bearer ${rawToken}`;
 
-  // --------- UI refs ---------
   const statusEl = $('status');
   const badgeLive = $('live');
   const badgeVC = $('vc');
@@ -30,7 +23,6 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
   const remote = $('remote');
   const qualitySel = $('qualitySel');
 
-  // --------- Live slug from URL ---------
   const slug = new URLSearchParams(location.search).get('slug');
   if (!slug) {
     statusEl.textContent = '❌ Missing live slug. Please open from the Live List.';
@@ -39,14 +31,24 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
     return;
   }
 
-  // --------- Socket.IO connection ---------
-  const socket = io({ auth: { role: 'viewer', token, slug } });
+  // Use same-origin Socket.IO client; pass Bearer token
+  const socket = io({
+    path: '/socket.io',
+    transports: ['websocket', 'polling'],
+    auth: { role: 'viewer', token, slug },
+    withCredentials: true
+  });
+
   socket.on('connect', () => { statusEl.textContent = '🔗 Connected'; });
   socket.on('disconnect', () => {
     statusEl.textContent = '❌ Disconnected';
     badgeLive.textContent = 'OFFLINE';
     badgeLive.className = 'badge';
   });
+  socket.on('connect_error', (err) => {
+    statusEl.textContent = `⚠️ Connect error: ${err?.message || err}`;
+  });
+
   socket.on('viewers', (n) => (badgeVC.textContent = `👀 ${n}`));
   socket.on('newProducer', ({ kind }) => {
     toast(`${kind} stream updated`);
@@ -54,7 +56,6 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
     if (kind === 'audio') consumeAudio();
   });
 
-  // --------- mediasoup state ---------
   let device, recvTransport, videoConsumer, audioConsumer;
 
   async function loadDevice() {
@@ -104,8 +105,6 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
       };
       skel.style.display = 'none';
       statusEl.textContent = '🎥 Video playing';
-
-      // Optional: update resolution badge periodically
       updateResolutionBadge(c).catch(()=>{});
     } catch (err) {
       skel.style.display = 'none';
@@ -128,20 +127,12 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
     }
   }
 
-  // --------- Quality control (simulcast layers) ---------
   qualitySel.onchange = () => {
     const v = qualitySel.value;
-    const pref =
-      v === 'high' ? { spatialLayer: 2 } :
-      v === 'med'  ? { spatialLayer: 1 } :
-      v === 'low'  ? { spatialLayer: 0 } :
-                     { spatialLayer: 2 };
-    socket.emit('setPreferredLayers', pref, () => {
-      badgeQ.textContent = `Quality: ${v}`;
-    });
+    const pref = v === 'high' ? { spatialLayer: 2 } : v === 'med' ? { spatialLayer: 1 } : v === 'low' ? { spatialLayer: 0 } : { spatialLayer: 2 };
+    socket.emit('setPreferredLayers', pref, () => { badgeQ.textContent = `Quality: ${v}`; });
   };
 
-  // --------- Resolution badge from stats ---------
   async function updateResolutionBadge(consumer) {
     let lastLabel = '';
     setInterval(async () => {
@@ -160,18 +151,11 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
       });
       if (h) {
         const label = `${h}p`;
-        if (label !== lastLabel) {
-          badgeRes.textContent = label;
-          lastLabel = label;
-        }
+        if (label !== lastLabel) { badgeRes.textContent = label; lastLabel = label; }
       }
     }, 2000);
   }
 
-  // --------- Start playback ---------
-  consumeVideo().catch(() => {
-    statusEl.textContent = '⚠️ Waiting for live stream…';
-    skel.style.display = 'block';
-  });
+  consumeVideo().catch(() => { statusEl.textContent = '⚠️ Waiting for live stream…'; skel.style.display = 'block'; });
   consumeAudio().catch(() => {});
 })();

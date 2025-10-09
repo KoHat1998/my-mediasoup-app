@@ -294,10 +294,14 @@ app.use(express.static('public')); // serves /signin.html, /signup.html, etc.
 
 // ---------------- Socket.IO ----------------
 io.use((socket, next) => {
-  const { role, token, liveId, slug } = socket.handshake.auth || {};
-  if (!TEST_AUTH_BYPASS && (!token || !/^Bearer\s+/i.test(token))) {
+  const { role, token: raw, liveId, slug } = socket.handshake.auth || {};
+  // Normalize token: accept "jwt" or "Bearer jwt"
+  const token = raw ? (/^Bearer\s+/i.test(raw) ? raw : `Bearer ${raw}`) : '';
+
+  if (!TEST_AUTH_BYPASS && !token) {
     return next(new Error('auth required'));
   }
+
   socket.data.role = role || 'viewer';
   socket.data.token = token || 'Bearer fake';
 
@@ -310,6 +314,15 @@ io.use((socket, next) => {
   socket.data.slug = live.slug;
   socket.data.isHost = socket.data.role === 'broadcaster';
   next();
+});
+
+// (optional but useful for debugging)
+io.engine.on('connection_error', (err) => {
+  console.error('engine.io connection_error:', {
+    code: err.code,
+    message: err.message,
+    context: err.context
+  });
 });
 
 io.on('connection', (socket) => {

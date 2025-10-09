@@ -384,15 +384,7 @@
     document.addEventListener('webkitfullscreenchange', () => emitToFlutter('fullscreenChanged', { isFullscreen: !!document.webkitFullscreenElement })); // Safari
 
 
-    // Remove initial auto-watch if Flutter will call init
-    // const initialChannelId = new URLSearchParams(location.search).get('ch');
-    // const initialHost = new URLSearchParams(location.search).get('host') || location.origin; // Default to current origin if no host param
-    // if (initialChannelId) {
-    //   console.log(`Initial auto-watch for channel: ${initialChannelId} on host: ${initialHost}`);
-    //   startWatch(initialChannelId, initialHost);
-    // } else {
-    //   updateStatus('Ready. Waiting for init.', 'info');
-    // }
+
     updateStatus('Player Ready. Waiting for init from app.', 'info');
 
 
