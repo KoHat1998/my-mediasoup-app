@@ -9,7 +9,7 @@ const { randomUUID } = require('crypto');
 
 // ---------------- Config ----------------
 const PORT = process.env.PORT || 3000;
-const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '13.210.150.18';
+const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '52.62.49.247';
 const WEBRTC_MIN_PORT = parseInt(process.env.WEBRTC_MIN_PORT || '40000', 10);
 const WEBRTC_MAX_PORT = parseInt(process.env.WEBRTC_MAX_PORT || '49999', 10);
 const TEST_AUTH_BYPASS = String(process.env.TEST_AUTH_BYPASS || '').toLowerCase() === 'true';
