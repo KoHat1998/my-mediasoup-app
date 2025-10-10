@@ -48,15 +48,30 @@
     catch { return iso || ''; }
   };
 
+  // Build one live card (now includes host)
   const liveTile = (l) => {
     const title = escapeHtml(l.title || 'Untitled Live');
     const started = fmtDate(l.createdAt);
     const watchUrl = `/viewer.html?slug=${encodeURIComponent(l.slug)}`;
     const copyFn = `copySlug('${encodeURIComponent(l.slug)}')`;
+
+    // host can come as hostName/hostEmail or in l.host.{name,email}
+    const hostNameRaw = l.hostName || l.host?.name || null;
+    const hostEmailRaw = l.hostEmail || l.host?.email || null;
+    const hostLabel = escapeHtml(hostNameRaw || hostEmailRaw || 'Unknown');
+
     return `
       <div class="tile">
         <div class="badges"><span class="badge live">LIVE</span></div>
         <h3 class="title" title="${title}">${title}</h3>
+
+        <div style="display:flex;align-items:center;gap:8px;margin:4px 0 8px;">
+          <div style="width:24px;height:24px;border-radius:999px;background:var(--bg-soft);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.8rem;">
+            ${hostLabel.charAt(0).toUpperCase()}
+          </div>
+          <span class="meta">by ${hostLabel}</span>
+        </div>
+
         <p class="meta">Started ${escapeHtml(started)}</p>
         <div style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap">
           <a class="btn ghost" href="${watchUrl}">Watch</a>
@@ -71,10 +86,13 @@
     const q = filterText.trim().toLowerCase();
 
     if (q) {
-      arr = arr.filter((x) =>
-        (x.title || '').toLowerCase().includes(q) ||
-        (x.slug || '').toLowerCase().includes(q)
-      );
+      arr = arr.filter((x) => {
+        const t = (x.title || '').toLowerCase();
+        const s = (x.slug || '').toLowerCase();
+        const hn = (x.hostName || x.host?.name || '').toLowerCase();
+        const he = (x.hostEmail || x.host?.email || '').toLowerCase();
+        return t.includes(q) || s.includes(q) || hn.includes(q) || he.includes(q);
+      });
     }
 
     if (sortMode === 'title') {
@@ -93,7 +111,6 @@
       if (listEl) listEl.innerHTML = '';
       if (emptyEl) emptyEl.style.display = 'block';
       if (hintEl) hintEl.textContent = 'Browse streams or start your own.';
-      // If lives.html provided a hook, inform it
       window.livenixSetVisibility?.(false);
       return;
     }
@@ -137,6 +154,9 @@
 
   async function createLive() {
     const title = prompt('Live title?') || 'My Live';
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    const email = user.email || localStorage.getItem('email') || '';
+    const hostName = user.name || user.username || email || 'Unknown';
     try {
       const r = await fetch('/api/lives', {
         method: 'POST',
@@ -144,7 +164,7 @@
           'Content-Type': 'application/json',
           'Authorization': AUTH
         },
-        body: JSON.stringify({ title })
+        body: JSON.stringify({ title, hostName, hostEmail: email })
       });
 
       if (r.status === 401) {

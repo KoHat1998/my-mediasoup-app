@@ -208,7 +208,7 @@ function requireAuthHeader(req, res, next) {
 
 // ---------------- REST: Lives ----------------
 app.post('/api/lives', requireAuthHeader, async (req, res) => {
-  const { title, description } = req.body || {};
+  const { title, description, hostName, hostEmail } = req.body || {};
   const id = randomUUID();
   const slug = makeSlug(title || 'live');
   const live = {
@@ -217,6 +217,10 @@ app.post('/api/lives', requireAuthHeader, async (req, res) => {
     title: title || 'Untitled Live',
     description: description || null,
     hostUserId: 'token:' + (req.user.token || '').slice(0, 12),
+    host: {
+      name: (hostName || '').toString().slice(0, 80) || null,
+      email: (hostEmail || '').toString().slice(0, 120) || null
+    },
     isLive: true,
     createdAt: new Date().toISOString(),
     endedAt: null,
@@ -246,7 +250,9 @@ app.get('/api/lives', requireAuthHeader, async (_req, res) => {
       slug: l.slug,
       title: l.title,
       description: l.description,
-      createdAt: l.createdAt
+      createdAt: l.createdAt,
+      hostName: l.host?.name || null,      // convenience for UI
+      hostEmail: l.host?.email || null
     }));
   return res.json(list);
 });
