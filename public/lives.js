@@ -75,7 +75,7 @@
         <p class="meta">Started ${escapeHtml(started)}</p>
         <div style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap">
           <a class="btn ghost" href="${watchUrl}">Watch</a>
-          <button class="btn link" onclick="${copyFn}">Copy link</button>
+          <button class="btn link" onclick="${copyFn}">Copy Link</button>
         </div>
       </div>
     `;
