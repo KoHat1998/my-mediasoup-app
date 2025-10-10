@@ -2,225 +2,121 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>KoHat Live Viewer</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Livenix • Player</title>
   <style>
-    :root { color-scheme: light dark; }
-    html, body { margin:0; padding:0; height:100%; width:100%; background:#000; }
-    .wrap { display:flex; flex-direction:column; min-height:100vh; }
-    header { padding:10px 14px; border-bottom:1px solid #00000022; display:flex; align-items:center; gap:10px; background:#0b0b0b; color:#fff; }
-    header h1 { margin:0; font-size:14px; font-weight:600; opacity:.9 }
-    main { flex:1; display:flex; align-items:center; justify-content:center; padding:0; }
-    video { width:100vw; height:calc(100vh - 48px); object-fit:contain; background:#000; }
-    .pill { padding:4px 8px; border-radius:999px; font-size:12px; background:#ef4444; color:white; }
-    .pill.live { background:#2563eb; }
-    #host { margin-left:auto; opacity:.7; font-size:12px }
+    html,body{height:100%;margin:0;background:#0B0E19;color:#e9f2ff;font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial;}
+    .wrap{display:flex;flex-direction:column;min-height:100%}
+    header{padding:10px 14px;border-bottom:1px solid #1e2536;display:flex;gap:10px;align-items:center}
+    header .pill{background:#ff337d;color:#fff;padding:4px 10px;border-radius:999px;font-weight:700}
+    main{flex:1;display:flex;align-items:center;justify-content:center;padding:12px}
+    video{width:min(100vw,100%);max-height:75vh;background:#000;border-radius:12px}
+    footer{padding:8px 14px;border-top:1px solid #1e2536;display:flex;justify-content:space-between;font-size:12px;opacity:.85}
+    #err{color:#ff8aa8;font-weight:600}
   </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <span id="status" class="pill">OFFLINE</span>
-    <h1 id="title">Viewer</h1>
-    <div id="host"></div>
+    <span id="live" class="pill">CONNECTING…</span>
+    <div id="title" style="font-weight:700">Viewer</div>
+    <div style="margin-left:auto;opacity:.8" id="host"></div>
   </header>
+
   <main>
-    <video id="video" playsinline autoplay muted></video>
+    <video id="v" playsinline autoplay controls muted></video>
   </main>
+
+  <footer>
+    <div id="err"></div>
+    <div><small>Tip: tap Unmute if audio is blocked.</small></div>
+  </footer>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
-
-<!-- WebView safety shims BEFORE mediasoup-client -->
-<script>
-(function () {
-  function defaultCaps(kind){
-    if (kind === 'audio') {
-      return { codecs: [{ mimeType: 'audio/opus', clockRate: 48000, channels: 2 }], headerExtensions: [] };
-    }
-    return {
-      codecs: [
-        { mimeType: 'video/VP8',  clockRate: 90000 },
-        { mimeType: 'video/H264', clockRate: 90000, parameters: { 'level-asymmetry-allowed': 1, 'packetization-mode': 1, 'profile-level-id': '42e01f' } }
-      ],
-      headerExtensions: []
-    };
-  }
-  function wrapCaps(obj, fn) {
-    try {
-      const base = obj && obj[fn] && obj[fn].bind(obj);
-      obj[fn] = function(kind){
-        try {
-          const v = base ? base(kind) : null;
-          if (v && typeof v === 'object' && Array.isArray(v.codecs)) return v;
-        } catch(e){}
-        return defaultCaps(kind);
-      };
-    } catch (_) {}
-  }
-  if (!window.RTCRtpReceiver) window.RTCRtpReceiver = {};
-  if (!window.RTCRtpSender)   window.RTCRtpSender   = {};
-  wrapCaps(window.RTCRtpReceiver, 'getCapabilities');
-  wrapCaps(window.RTCRtpSender,   'getCapabilities');
-
-  if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
-    try {
-      const orig = MediaSource.isTypeSupported.bind(MediaSource);
-      MediaSource.isTypeSupported = (t)=>{ try { return orig(t); } catch(_) { return false; } };
-    } catch(_) {}
-  }
-})();
-</script>
-
 <script type="module">
-  import * as _ms from 'https://esm.sh/mediasoup-client@3';
-  const mediasoupClient = _ms?.default ?? _ms;
+  import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
-  const qs = new URLSearchParams(location.search);
-  const ident = qs.get('slug') || qs.get('liveId') || qs.get('id') || qs.get('room') || qs.get('ch') || '';
-  const token = qs.get('token') || ''; // raw or Bearer …
+  const qs   = new URLSearchParams(location.search);
+  const slug = qs.get('slug') || qs.get('id') || qs.get('room') || '';
+  const rawToken = qs.get('token') || '';
+  const token = rawToken ? (/^Bearer\s/i.test(rawToken) ? rawToken : `Bearer ${rawToken}`) : '';
 
-  const $status = document.getElementById('status');
-  const $title  = document.getElementById('title');
-  const $host   = document.getElementById('host');
-  const $video  = document.getElementById('video');
+  const $live = document.getElementById('live');
+  const $v    = document.getElementById('v');
+  const $err  = document.getElementById('err');
+  const $title= document.getElementById('title');
 
-  // Helpful labels
-  $title.textContent = ident || '(no id)';
-  $host.textContent  = location.host;
-
-  function setBadge(text, live=false){
-    $status.textContent = text;
-    $status.className = live ? 'pill live' : 'pill';
-    if (window.flutter_inappwebview?.callHandler) {
-      window.flutter_inappwebview.callHandler('playerStatus', { message: text, type: live ? 'live' : 'info' });
-    }
-    console.log('[VIEWER]', text);
+  function setLive(text, bad=false) {
+    $live.textContent = text;
+    $live.style.background = bad ? '#ff285f' : '#22c55e';
   }
 
-  // autoplay-friendly defaults
-  try {
-    $video.muted = true;
-    $video.playsInline = true;
-    $video.setAttribute('playsinline','');
-    $video.setAttribute('webkit-playsinline','');
-    $video.autoplay = true;
-  } catch(_) {}
-
-  if (!ident) {
-    setBadge('Missing id/slug', false);
-    throw new Error('Provide ?slug= or ?liveId= or ?id= or ?room=');
+  if (!slug) {
+    setLive('NO SLUG', true);
+    $err.textContent = 'Missing ?slug in URL';
+    throw new Error('Missing slug');
   }
+  $title.textContent = 'Viewer: ' + slug;
 
-  // Make token accessible for legacy code paths
-  try {
-    if (token) {
-      const bearer = /^Bearer\s+/i.test(token) ? token : ('Bearer ' + token);
-      localStorage.setItem('token', bearer);
-      localStorage.setItem('authToken', bearer.replace(/^Bearer\s+/i,''));
-    }
-  } catch(_) {}
-
+  // Socket.IO: websocket only (avoids polling/CORS headaches in WebView)
   const socket = io('/', {
-    path: '/socket.io',
-    transports: ['websocket','polling'],
-    withCredentials: true,
-    auth: {
-      role: 'viewer',
-      token: token ? (/^Bearer\s+/i.test(token) ? token : 'Bearer ' + token) : undefined,
-      slug: ident,
-      liveId: ident
-    }
+    transports: ['websocket'],
+    auth: { role: 'viewer', token, slug },
   });
 
-  socket.on('connect_error', (e) => { console.log('[VIEWER] connect_error', e?.message || e); setBadge('Connect error', false); });
-  socket.on('disconnect',   (r) => { setBadge('Disconnected', false); });
+  socket.on('connect', start).on('connect_error', (e) => {
+    setLive('CONNECT ERROR', true);
+    $err.textContent = e?.message || String(e);
+  });
 
-  let device, recvTransport, haveVideo = false;
+  async function start() {
+    try {
+      setLive('CONNECTING…');
+      const rtpCaps = await emitAck('getRtpCapabilities', null);
+      const device = new mediasoupClient.Device();
+      await device.load({ routerRtpCapabilities: rtpCaps });
 
-  async function emitAck(event, payload){
+      const tInfo = await emitAck('createRecvTransport', null);
+      const recvTransport = device.createRecvTransport(tInfo);
+      recvTransport.on('connect', ({ dtlsParameters }, cb, err) =>
+        emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err)
+      );
+
+      async function consume(kind) {
+        const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
+        if (res?.error) throw new Error(res.error);
+        const consumer = await recvTransport.consume({
+          id: res.id, producerId: res.producerId, kind: res.kind, rtpParameters: res.rtpParameters
+        });
+        await emitAck('resume', { consumerId: consumer.id });
+        if (kind === 'video') $v.srcObject = new MediaStream([consumer.track]);
+      }
+
+      try { await consume('video'); } catch (e) { console.warn('no video yet', e); }
+      try { await consume('audio'); } catch (e) { console.warn('no audio yet', e); }
+
+      setLive('LIVE');
+
+      socket.on('newProducer', async (p) => {
+        try { await consume(p.kind); } catch (e) { console.warn('consume on newProducer failed', e); }
+      });
+
+    } catch (e) {
+      setLive('ERROR', true);
+      $err.textContent = e?.message || String(e);
+      console.error(e);
+    }
+  }
+
+  function emitAck(event, payload) {
     return new Promise((resolve, reject) => {
-      socket.timeout(10000).emit(event, payload, (res) => {
+      socket.timeout(8000).emit(event, payload, (res) => {
         if (res && res.error) return reject(new Error(res.error));
         resolve(res);
       });
     });
   }
-
-  async function ensureDevice() {
-    if (device) return;
-    const routerRtpCapabilities = await emitAck('getRtpCapabilities', null);
-    // Force Chrome74 handler to avoid the null.codecs branch
-    device = new mediasoupClient.Device({ handlerName: 'Chrome74' });
-    await device.load({ routerRtpCapabilities });
-  }
-
-  async function ensureRecvTransport() {
-    if (recvTransport) return;
-    const tInfo = await emitAck('createRecvTransport', null);
-    recvTransport = device.createRecvTransport(tInfo);
-    recvTransport.on('connect', ({ dtlsParameters }, cb, err) => {
-      emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err);
-    });
-  }
-
-  function attachAndPlay(track) {
-    const ms = $video.srcObject || new MediaStream();
-    // Replace old track of same kind
-    ms.getTracks().filter(t => t.kind === track.kind).forEach(t => ms.removeTrack(t));
-    ms.addTrack(track);
-    $video.srcObject = ms;
-
-    // Kick playback (Android WebView needs this)
-    $video.play().catch(()=>{});
-  }
-
-  $video.addEventListener('loadedmetadata', () => {
-    $video.play().catch(()=>{});
-  });
-
-  async function consume(kind) {
-    await ensureDevice();
-    await ensureRecvTransport();
-
-    const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
-    if (res?.error) return false;
-
-    const consumer = await recvTransport.consume({
-      id: res.id,
-      producerId: res.producerId,
-      kind: res.kind,
-      rtpParameters: res.rtpParameters
-    });
-
-    attachAndPlay(consumer.track);
-
-    await emitAck('resume', { consumerId: consumer.id });
-    if (kind === 'video') haveVideo = true;
-    return true;
-  }
-
-  socket.on('connect', async () => {
-    try {
-      setBadge('Connecting…', false);
-      const vOk = await consume('video');
-      await consume('audio').catch(()=>{});
-      setBadge(vOk ? 'LIVE' : 'Waiting…', !!vOk);
-    } catch (e) {
-      console.warn('[VIEWER] error', e);
-      setBadge('Error', false);
-    }
-  });
-
-  socket.on('newProducer', async (p) => {
-    try {
-      if (p.kind === 'video') haveVideo = await consume('video');
-      if (p.kind === 'audio') await consume('audio');
-      setBadge(haveVideo ? 'LIVE' : 'Waiting…', !!haveVideo);
-    } catch (e) {
-      console.warn('[VIEWER] newProducer failed', e);
-    }
-  });
 </script>
 </body>
 </html>
