@@ -449,36 +449,29 @@ app.get(['/player_only.html', '/viewer', '/viewer.html'], (_req, res) => {
 // ---------------- Socket.IO ----------------
 // ✔ Lazy-create a live if none exists for the provided slug/liveId
 io.use((socket, next) => {
-  const { role, token: raw, liveId: hintedLiveId, slug: hintedSlug } =
-    socket.handshake.auth || {};
-
+  const { role, token: raw, liveId: hintedLiveId, slug: hintedSlug } = socket.handshake.auth || {};
   const token = raw ? (/^Bearer\s+/i.test(raw) ? raw : `Bearer ${raw}`) : '';
 
-  // Auth: require token unless TEST_AUTH_BYPASS=true
-  if (!TEST_AUTH_BYPASS && !token) {
-    return next(new Error('auth required'));
+  if (!TEST_AUTH_BYPASS && !token) return next(new Error('auth required'));
+
+  // Find the live by id/slug, or lazily create it
+  let live = lives.get(hintedLiveId) || findLiveBySlug(hintedSlug);
+  if (!live) {
+    const hint = hintedSlug || hintedLiveId;
+    if (!hint) return next(new Error('live not found'));
+    live = getOrCreateLiveFromHint(hint);
   }
 
-  // role + token on socket
-  socket.data.role = (role || 'viewer').toLowerCase();
-  socket.data.token = token || 'Bearer fake';
-
-  // Require an identifier (slug or liveId)
-  const hint = hintedSlug || hintedLiveId;
-  if (!hint) {
-    return next(new Error('liveId/slug required'));
-  }
-
-  // Find existing or lazily create one for this hint
-  let live = lives.get(hint) || findLiveBySlug(hint);
-  if (!live) live = getOrCreateLiveFromHint(hint);
-
-  socket.data.liveId = live.id;
-  socket.data.slug = live.slug;
-  socket.data.isHost = socket.data.role === 'broadcaster';
-
-  return next();
+  socket.data = {
+    role: (role || 'viewer').toLowerCase(),
+    token: token || 'Bearer fake',
+    liveId: live.id,
+    slug: live.slug,
+    isHost: (role || 'viewer').toLowerCase() === 'broadcaster',
+  };
+  next();
 });
+
 
 
 io.engine.on('connection_error', (err) => {
