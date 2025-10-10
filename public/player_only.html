@@ -165,27 +165,57 @@
     });
   }
 
-  async function consume(kind) {
-    await ensureDevice();
-    await ensureRecvTransport();
+async function consume(kind) {
+  await ensureDevice();
+  await ensureRecvTransport();
 
-    const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
-    if (res?.error) throw new Error(res.error);
+  const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
+  if (res?.error) throw new Error(res.error);
 
-    const consumer = await recvTransport.consume({
-      id: res.id,
-      producerId: res.producerId,
-      kind: res.kind,
-      rtpParameters: res.rtpParameters
-    });
+  const consumer = await recvTransport.consume({
+    id: res.id,
+    producerId: res.producerId,
+    kind: res.kind,
+    rtpParameters: res.rtpParameters
+  });
 
+  // Attach the track only when it actually starts flowing frames.
+  if (kind === 'video') {
+    const onActive = () => {
+      const ms = $video.srcObject || new MediaStream();
+      ms.getVideoTracks().forEach(t => ms.removeTrack(t));
+      ms.addTrack(consumer.track);
+      $video.srcObject = ms;
+
+      // be explicit about playback
+      $video.autoplay = true;
+      $video.playsInline = true;
+      $video.setAttribute('playsinline', '');
+      $video.setAttribute('webkit-playsinline', '');
+
+      $video.muted = true; // user can press Unmute
+      $video.play().catch(() => {}); // some WebViews need this nudge
+      consumer.track.removeEventListener('unmute', onActive);
+    };
+
+    // If frames are already flowing, attach immediately; else wait.
+    if (consumer.track.enabled && consumer.track.readyState === 'live') {
+      onActive();
+    } else {
+      consumer.track.addEventListener('unmute', onActive);
+    }
+  } else {
+    // audio
     const ms = $video.srcObject || new MediaStream();
+    ms.getAudioTracks().forEach(t => ms.removeTrack(t));
     ms.addTrack(consumer.track);
     $video.srcObject = ms;
-
-    await emitAck('resume', { consumerId: consumer.id });
-    return consumer;
   }
+
+  await emitAck('resume', { consumerId: consumer.id });
+  return consumer;
+}
+
 
   socket.on('connect', async () => {
     try {
