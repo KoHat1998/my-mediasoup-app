@@ -84,25 +84,39 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
       socket.emit('produce', { kind, rtpParameters }, (data)=> data?.error ? errback(new Error(data.error)) : callback({ id: data.id })));
   }
 
-  function pickEncodings() {
-    return [
-      { rid: 'q', maxBitrate: 150_000, scaleResolutionDownBy: 4 }, // ~360p
-      { rid: 'h', maxBitrate: 600_000, scaleResolutionDownBy: 2 }, // ~540–720p
-      { rid: 'f', maxBitrate: 1_500_000, scaleResolutionDownBy: 1 } // ~720–1080p
-    ];
+  // ---------- IMPORTANT: VP8 single-layer only (no simulcast/SVC) ----------
+  function vp8Codec() {
+    return device.rtpCapabilities.codecs.find(c => /video\/VP8/i.test(c.mimeType));
   }
 
-  async function produceOrReplace(kind, track) {
+  async function produceOrReplace(kind, track, { isScreen = false } = {}) {
     if (kind === 'video') {
-      if (videoProducer) { await videoProducer.replaceTrack({ track }); return; }
-      const h264 = device.rtpCapabilities.codecs.find(c => /video\/H264/i.test(c.mimeType));
-      const opts = { track, encodings: pickEncodings() };
-      if (h264) opts.codec = h264;
-      videoProducer = await sendTransport.produce(opts);
+      // ensure VP8, single encoding
+      const codec = vp8Codec(); // safest on Android WebView
+      const videoOpts = {
+        track,
+        codec: codec || undefined,
+        encodings: [{ maxBitrate: isScreen ? 1800_000 : 1200_000 }], // single layer
+        // contentHint can help some browsers pick encoder settings
+        appData: { contentHint: isScreen ? 'detail' : 'motion' }
+      };
+      try { track.contentHint = isScreen ? 'detail' : 'motion'; } catch {}
+      if (videoProducer) {
+        await videoProducer.replaceTrack({ track });
+      } else {
+        videoProducer = await sendTransport.produce(videoOpts);
+        videoProducer.on('transportclose', () => { videoProducer = null; });
+        videoProducer.on('close', () => { videoProducer = null; });
+      }
     } else if (kind === 'audio') {
       if (!track) return;
-      if (audioProducer) await audioProducer.replaceTrack({ track });
-      else audioProducer = await sendTransport.produce({ track });
+      if (audioProducer) {
+        await audioProducer.replaceTrack({ track });
+      } else {
+        audioProducer = await sendTransport.produce({ track });
+        audioProducer.on('transportclose', () => { audioProducer = null; });
+        audioProducer.on('close', () => { audioProducer = null; });
+      }
     }
   }
 
@@ -133,7 +147,8 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
     const v = stream.getVideoTracks()[0] || null;
     const a = stream.getAudioTracks()[0] || null;
-    if (v) await produceOrReplace('video', v);
+
+    if (v) await produceOrReplace('video', v, { isScreen: label === 'screen' });
     if (a) await produceOrReplace('audio', a);
 
     if (currentStream && currentStream !== stream) stopStream(currentStream);
@@ -155,7 +170,16 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
     $('status').textContent = 'Requesting camera/mic…';
     skel(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: true });
+      // gentle 720p-ish request; browser will adapt
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height:{ ideal: 720 },
+          frameRate: { ideal: 30, max: 30 },
+          facingMode: 'user'
+        },
+        audio: true
+      });
       await swapToStream(stream, 'camera');
     } catch (e) {
       $('status').textContent = 'Failed: ' + (e?.message || e) + ' (HTTPS needed)';
@@ -168,7 +192,10 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
     $('status').textContent = 'Requesting screen…';
     skel(true);
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 },
+        audio: true
+      });
       const t = stream.getVideoTracks()[0];
       if (t) t.onended = async () => { toast('Screen share ended'); try { await startCamera(); } catch {} };
       await swapToStream(stream, 'screen');
@@ -202,7 +229,10 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
     try {
       const current = currentStream?.getVideoTracks()[0];
       const facing = (current?.getSettings?.().facingMode === 'user') ? 'environment' : 'user';
-      const newStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: facing } }, audio: true });
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: facing }, width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:30,max:30} },
+        audio: true
+      });
       await swapToStream(newStream, 'camera');
       $('status').textContent = `Camera flipped (${facing})`;
     } catch (err) { console.error(err); toast('Could not flip camera on this device'); }
