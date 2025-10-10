@@ -251,7 +251,7 @@ app.get('/api/lives', requireAuthHeader, async (_req, res) => {
       title: l.title,
       description: l.description,
       createdAt: l.createdAt,
-      hostName: l.host?.name || null,      // convenience for UI
+      hostName: l.host?.name || null,
       hostEmail: l.host?.email || null
     }));
   return res.json(list);
@@ -291,6 +291,8 @@ app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
 // ---------------- Static Routes ----------------
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/', (_req, res) => res.redirect('/lives.html'));
+
+// prevent stale HTML
 app.use((req, res, next) => {
   if (req.path.endsWith('.html')) {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -300,165 +302,16 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(express.static('public', { etag: false, lastModified: false, maxAge: 0 }));
 
-/* -------- Inline viewer: /player_only.html (also /viewer, /viewer.html) -------- */
-const PLAYER_HTML = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>KoHat Live Viewer</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, 'Helvetica Neue', Arial; }
-    .wrap { display:flex; flex-direction:column; min-height:100vh; }
-    header { padding:10px 14px; border-bottom:1px solid #00000022; display:flex; align-items:center; gap:10px; }
-    header h1 { margin:0; font-size:16px; font-weight:600; }
-    main { flex:1; display:flex; align-items:center; justify-content:center; padding:10px; }
-    video { width: min(100vw, 100%); max-height: 70vh; background:#000; border-radius:10px; }
-    .row { display:flex; gap:8px; align-items:center; }
-    .pill { padding:4px 8px; border-radius:999px; font-size:12px; background:#2563eb; color:white; }
-    .err { color:#ef4444; font-weight:600; }
-    footer { padding:8px 14px; border-top:1px solid #00000022; display:flex; justify-content:space-between; align-items:center; font-size:12px; opacity:.8;}
-    .muted { opacity:.7 }
-    button { padding:8px 12px; border-radius:8px; border:1px solid #00000022; background:#111827; color:white; cursor:pointer;}
-    button:disabled{ opacity:.5; cursor:not-allowed;}
-  </style>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <div class="row"><span class="pill" id="status">Idle</span></div>
-    <h1 id="title">Viewer</h1>
-    <div style="margin-left:auto" class="muted" id="info"></div>
-  </header>
-  <main>
-    <video id="video" playsinline autoplay muted controls></video>
-  </main>
-  <footer>
-    <div class="muted">Press play if your browser blocks autoplay.</div>
-    <div><button id="unmute">Unmute</button></div>
-  </footer>
-</div>
+// serve /public statics (player_only.html lives here)
+app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false, maxAge: 0 }));
 
-<script src="/socket.io/socket.io.js"></script>
-<script type="module">
-  import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
+// quiet down favicon noise (Flutter WebView often requests it)
+app.get('/favicon.ico', (_req, res) => res.status(204).end());
 
-  const qs = new URLSearchParams(location.search);
-  const ident = qs.get('slug') || qs.get('liveId') || qs.get('id') || qs.get('room') || qs.get('ch') || '';
-  const token = qs.get('token') || ''; // optional
-
-  const $status = document.getElementById('status');
-  const $title  = document.getElementById('title');
-  const $info   = document.getElementById('info');
-  const $video  = document.getElementById('video');
-  const $unmute = document.getElementById('unmute');
-
-  $title.textContent = 'Viewer: ' + (ident || '(no id)');
-  $info.textContent = location.host;
-
-  function setStatus(s, bad=false){
-    $status.textContent = s;
-    $status.style.background = bad ? '#ef4444' : '#2563eb';
-  }
-
-  if (!ident) {
-    setStatus('Missing id/slug', true);
-    throw new Error('Provide ?slug= or ?liveId= or ?id= or ?room=');
-  }
-
-  setStatus('Connecting…');
-  const socket = io('/', {
-    transports: ['websocket'],
-    auth: {
-      role: 'viewer',
-      token: token ? (/^Bearer\\s+/i.test(token) ? token : 'Bearer ' + token) : undefined,
-      slug: ident,
-      liveId: ident
-    }
-  });
-
-  socket.on('connect', async () => {
-    try {
-      setStatus('Loading caps…');
-      const rtpCaps = await emitAck('getRtpCapabilities', null);
-
-      const device = new mediasoupClient.Device();
-      await device.load({ routerRtpCapabilities: rtpCaps });
-
-      setStatus('Creating transport…');
-      const tInfo = await emitAck('createRecvTransport', null);
-      const recvTransport = device.createRecvTransport(tInfo);
-
-      recvTransport.on('connect', ({ dtlsParameters }, cb, err) => {
-        emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err);
-      });
-
-      async function consumeKind(kind) {
-        const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
-        if (res?.error) throw new Error(res.error);
-        const consumer = await recvTransport.consume({
-          id: res.id,
-          producerId: res.producerId,
-          kind: res.kind,
-          rtpParameters: res.rtpParameters
-        });
-        const ms = new MediaStream([consumer.track]);
-        if (kind === 'video') $video.srcObject = ms;
-        await emitAck('resume', { consumerId: consumer.id });
-        return consumer;
-      }
-
-      setStatus('Starting video…');
-      try { await consumeKind('video'); } catch(e){ console.warn('video:', e); }
-
-      setStatus('Starting audio…');
-      try { await consumeKind('audio'); } catch(e){ console.warn('audio:', e); }
-
-      setStatus('LIVE');
-
-      socket.on('newProducer', async (p) => {
-        try {
-          if (p.kind === 'video') { await consumeKind('video'); }
-          if (p.kind === 'audio') { await consumeKind('audio'); }
-        } catch(e) { console.warn('newProducer consume failed:', e); }
-      });
-
-    } catch (e) {
-      console.error(e);
-      setStatus('Error', true);
-      alert('Viewer error: ' + (e?.message || e));
-    }
-  });
-
-  socket.on('connect_error', (e) => {
-    console.error('connect_error', e);
-    setStatus('Connect error', true);
-  });
-
-  function emitAck(event, payload){
-    return new Promise((resolve, reject) => {
-      socket.timeout(8000).emit(event, payload, (res) => {
-        if (res && res.error) return reject(new Error(res.error));
-        resolve(res);
-      });
-    });
-  }
-
-  $unmute.addEventListener('click', async () => {
-    try {
-      $video.muted = false;
-      await $video.play().catch(()=>{});
-    } catch (_) {}
-  });
-</script>
-</body>
-</html>`;
-
+// explicit viewer routes -> actual file
 app.get(['/player_only.html', '/viewer', '/viewer.html'], (_req, res) => {
-  res.type('html').send(PLAYER_HTML);
+  res.sendFile(path.join(__dirname, 'public', 'player_only.html'));
 });
 
 // ---------------- Socket.IO ----------------
@@ -486,8 +339,6 @@ io.use((socket, next) => {
   };
   next();
 });
-
-
 
 io.engine.on('connection_error', (err) => {
   console.error('engine.io connection_error:', {
@@ -630,7 +481,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// ---------------- Error handler ----------------  
+// ---------------- Error handler ----------------
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });
