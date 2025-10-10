@@ -450,7 +450,7 @@ app.get(['/player_only.html', '/viewer', '/viewer.html'], (_req, res) => {
 // ✔ Lazy-create a live if none exists for the provided slug/liveId
 io.use((socket, next) => {
   const { role, token: raw, liveId: hintedLiveId, slug: hintedSlug } = socket.handshake.auth || {};
-  const token = raw ? (/^Bearer\s+/i.test(raw) ? raw : `Bearer ${raw}`) : '';
+  console.log('SOCKET AUTH → hasToken:', !!raw, 'role:', role, 'slug:', hintedSlug, 'liveId:', hintedLiveId);
 
   if (!TEST_AUTH_BYPASS && !token) {
     return next(new Error('auth required'));
