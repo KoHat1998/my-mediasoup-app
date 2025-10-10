@@ -165,56 +165,57 @@
     });
   }
 
-async function consume(kind) {
-  await ensureDevice();
-  await ensureRecvTransport();
+  async function consume(kind) {
+    // load/create as you already do
+    await ensureDevice();
+    await ensureRecvTransport();
 
-  const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
-  if (res?.error) throw new Error(res.error);
+    const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
+    if (res?.error) throw new Error(res.error);
 
-  const consumer = await recvTransport.consume({
-    id: res.id,
-    producerId: res.producerId,
-    kind: res.kind,
-    rtpParameters: res.rtpParameters
-  });
+    const consumer = await recvTransport.consume({
+      id: res.id,
+      producerId: res.producerId,
+      kind: res.kind,
+      rtpParameters: res.rtpParameters
+    });
 
-  // Attach the track only when it actually starts flowing frames.
-  if (kind === 'video') {
-    const onActive = () => {
+    if (kind === 'video') {
+      // attach when frames start flowing
+      const attachVideo = () => {
+        const ms = $video.srcObject || new MediaStream();
+        ms.getVideoTracks().forEach(t => ms.removeTrack(t));
+        ms.addTrack(consumer.track);
+        $video.srcObject = ms;
+
+        // autoplay-friendly flags + nudge
+        $video.autoplay = true;
+        $video.muted = true;          // user can press Unmute later
+        $video.playsInline = true;
+        $video.setAttribute('playsinline','');
+        $video.setAttribute('webkit-playsinline','');
+        $video.play().catch(()=>{});
+        consumer.track.removeEventListener('unmute', attachVideo);
+      };
+
+      if (consumer.track.readyState === 'live') attachVideo();
+      else consumer.track.addEventListener('unmute', attachVideo);
+    } else {
+      // audio
       const ms = $video.srcObject || new MediaStream();
-      ms.getVideoTracks().forEach(t => ms.removeTrack(t));
+      ms.getAudioTracks().forEach(t => ms.removeTrack(t));
       ms.addTrack(consumer.track);
       $video.srcObject = ms;
-
-      // be explicit about playback
-      $video.autoplay = true;
-      $video.playsInline = true;
-      $video.setAttribute('playsinline', '');
-      $video.setAttribute('webkit-playsinline', '');
-
-      $video.muted = true; // user can press Unmute
-      $video.play().catch(() => {}); // some WebViews need this nudge
-      consumer.track.removeEventListener('unmute', onActive);
-    };
-
-    // If frames are already flowing, attach immediately; else wait.
-    if (consumer.track.enabled && consumer.track.readyState === 'live') {
-      onActive();
-    } else {
-      consumer.track.addEventListener('unmute', onActive);
     }
-  } else {
-    // audio
-    const ms = $video.srcObject || new MediaStream();
-    ms.getAudioTracks().forEach(t => ms.removeTrack(t));
-    ms.addTrack(consumer.track);
-    $video.srcObject = ms;
-  }
 
-  await emitAck('resume', { consumerId: consumer.id });
-  return consumer;
-}
+    await emitAck('resume', { consumerId: consumer.id });
+
+    // Ask SFU for a safe (medium) simulcast layer in WebView
+    if (kind === 'video') {
+      try { socket.emit('setPreferredLayers', { spatialLayer: 1 }, () => {}); } catch (_) {}
+    }
+    return consumer;
+  }
 
 
   socket.on('connect', async () => {
