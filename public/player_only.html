@@ -2,150 +2,225 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <title>KoHat Live Viewer</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Live</title>
   <style>
-    html,body{margin:0;padding:0;background:#000;height:100%;width:100%;overflow:hidden}
-    video{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
-    #badge{
-      position:fixed;top:10px;left:10px;z-index:10;
-      padding:4px 10px;border-radius:999px;
-      font:12px/1 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-      color:#fff;background:#ef4444; /* OFFLINE = red */
-      user-select:none;pointer-events:none;
-    }
-    #badge.live{background:#2563eb;} /* LIVE = blue */
+    :root { color-scheme: light dark; }
+    html, body { margin:0; padding:0; height:100%; width:100%; background:#000; }
+    .wrap { display:flex; flex-direction:column; min-height:100vh; }
+    header { padding:10px 14px; border-bottom:1px solid #00000022; display:flex; align-items:center; gap:10px; background:#0b0b0b; color:#fff; }
+    header h1 { margin:0; font-size:14px; font-weight:600; opacity:.9 }
+    main { flex:1; display:flex; align-items:center; justify-content:center; padding:0; }
+    video { width:100vw; height:calc(100vh - 48px); object-fit:contain; background:#000; }
+    .pill { padding:4px 8px; border-radius:999px; font-size:12px; background:#ef4444; color:white; }
+    .pill.live { background:#2563eb; }
+    #host { margin-left:auto; opacity:.7; font-size:12px }
   </style>
 </head>
 <body>
-  <div id="badge">OFFLINE</div>
-  <video id="v" playsinline autoplay muted></video>
+<div class="wrap">
+  <header>
+    <span id="status" class="pill">OFFLINE</span>
+    <h1 id="title">Viewer</h1>
+    <div id="host"></div>
+  </header>
+  <main>
+    <video id="video" playsinline autoplay muted></video>
+  </main>
+</div>
 
-  <script src="/socket.io/socket.io.js"></script>
+<script src="/socket.io/socket.io.js"></script>
 
-  <!-- Android WebView safety shim to avoid null getCapabilities -> 'codecs' crash -->
-  <script>
-  (function(){
-    function caps(x){ if(!x||typeof x!=='object') x={}; if(!Array.isArray(x.codecs)) x.codecs=[]; if(!Array.isArray(x.headerExtensions)) x.headerExtensions=[]; return x; }
-    if (window.RTCRtpReceiver?.getCapabilities){
-      const o=RTCRtpReceiver.getCapabilities.bind(RTCRtpReceiver);
-      RTCRtpReceiver.getCapabilities=(k)=>{ try{return caps(o(k));}catch(_){return caps(null);} };
+<!-- WebView safety shims BEFORE mediasoup-client -->
+<script>
+(function () {
+  function defaultCaps(kind){
+    if (kind === 'audio') {
+      return { codecs: [{ mimeType: 'audio/opus', clockRate: 48000, channels: 2 }], headerExtensions: [] };
     }
-    if (window.RTCRtpSender?.getCapabilities){
-      const o=RTCRtpSender.getCapabilities.bind(RTCRtpSender);
-      RTCRtpSender.getCapabilities=(k)=>{ try{return caps(o(k));}catch(_){return caps(null);} };
-    }
-  })();
-  </script>
-
-  <!-- Minimal mediasoup viewer with LIVE/OFFLINE badge -->
-  <script type="module">
-  (async () => {
-    const $v = document.getElementById('v');
-    const $badge = document.getElementById('badge');
-
-    // autoplay-friendly defaults (video-only; keep muted)
-    $v.autoplay = true;
-    $v.muted = true;
-    $v.playsInline = true;
-    $v.setAttribute('playsinline','');
-    $v.setAttribute('webkit-playsinline','');
-
-    // import mediasoup-client
-    let m = await import('https://esm.sh/mediasoup-client@3');
-    const mediasoupClient = m?.default ?? m;
-
-    // read query params from Flutter URL
-    const qs = new URLSearchParams(location.search);
-    const ident = qs.get('slug') || qs.get('liveId') || qs.get('id') || qs.get('room') || qs.get('ch') || '';
-    if (!ident) { $badge.textContent='OFFLINE'; $badge.classList.remove('live'); return; }
-    const rawTok = qs.get('token') || '';
-    const token = rawTok ? (/^Bearer\s+/i.test(rawTok) ? rawTok : ('Bearer '+rawTok)) : undefined;
-
-    // socket.io
-    const socket = io('/', {
-      path: '/socket.io',
-      transports: ['websocket','polling'],
-      withCredentials: true,
-      auth: { role: 'viewer', token, slug: ident, liveId: ident }
-    });
-
-    // mediasoup state
-    let device, recvTransport, videoConsumer;
-
-    const emitAck = (ev, data) => new Promise((res,rej)=>{
-      socket.timeout(10000).emit(ev, data, (r)=>{
-        if (r && r.error) return rej(new Error(r.error));
-        res(r);
-      });
-    });
-
-    async function ensureDevice(){
-      if (device) return;
-      const caps = await emitAck('getRtpCapabilities', null);
-      device = new mediasoupClient.Device();
-      await device.load({ routerRtpCapabilities: caps });
-    }
-
-    async function ensureRecvTransport(){
-      if (recvTransport) return;
-      const info = await emitAck('createRecvTransport', null);
-      recvTransport = device.createRecvTransport(info);
-      recvTransport.on('connect', ({dtlsParameters}, cb, eb) => {
-        emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(eb);
-      });
-    }
-
-    function setBadgeLive(live){
-      if (live) { $badge.textContent='LIVE'; $badge.classList.add('live'); }
-      else { $badge.textContent='OFFLINE'; $badge.classList.remove('live'); }
-    }
-
-    async function consumeVideo(){
-      await ensureDevice();
-      await ensureRecvTransport();
-
-      const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind: 'video' });
-      if (res?.error) throw new Error(res.error);
-
-      // close previous
-      try { videoConsumer?.close(); } catch(_){}
-
-      const consumer = await recvTransport.consume({
-        id: res.id, producerId: res.producerId, kind: 'video', rtpParameters: res.rtpParameters
-      });
-
-      const attach = async () => {
-        const ms = new MediaStream([consumer.track]);
-        $v.srcObject = ms;
-        try { await $v.play(); } catch (_) {}
-        setBadgeLive(true);
+    return {
+      codecs: [
+        { mimeType: 'video/VP8',  clockRate: 90000 },
+        { mimeType: 'video/H264', clockRate: 90000, parameters: { 'level-asymmetry-allowed': 1, 'packetization-mode': 1, 'profile-level-id': '42e01f' } }
+      ],
+      headerExtensions: []
+    };
+  }
+  function wrapCaps(obj, fn) {
+    try {
+      const base = obj && obj[fn] && obj[fn].bind(obj);
+      obj[fn] = function(kind){
+        try {
+          const v = base ? base(kind) : null;
+          if (v && typeof v === 'object' && Array.isArray(v.codecs)) return v;
+        } catch(e){}
+        return defaultCaps(kind);
       };
+    } catch (_) {}
+  }
+  if (!window.RTCRtpReceiver) window.RTCRtpReceiver = {};
+  if (!window.RTCRtpSender)   window.RTCRtpSender   = {};
+  wrapCaps(window.RTCRtpReceiver, 'getCapabilities');
+  wrapCaps(window.RTCRtpSender,   'getCapabilities');
 
-      if (consumer.track.readyState === 'live') attach();
-      else {
-        const onUnmute = async () => { consumer.track.removeEventListener('unmute', onUnmute); await attach(); };
-        consumer.track.addEventListener('unmute', onUnmute);
-      }
+  if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
+    try {
+      const orig = MediaSource.isTypeSupported.bind(MediaSource);
+      MediaSource.isTypeSupported = (t)=>{ try { return orig(t); } catch(_) { return false; } };
+    } catch(_) {}
+  }
+})();
+</script>
 
-      await emitAck('resume', { consumerId: consumer.id }).catch(()=>{});
-      try { await consumer.requestKeyFrame(); } catch(_) {}
-      try { socket.emit('setPreferredLayers', { spatialLayer: 1 }, () => {}); } catch(_){}
+<script type="module">
+  import * as _ms from 'https://esm.sh/mediasoup-client@3';
+  const mediasoupClient = _ms?.default ?? _ms;
 
-      videoConsumer = consumer;
+  const qs = new URLSearchParams(location.search);
+  const ident = qs.get('slug') || qs.get('liveId') || qs.get('id') || qs.get('room') || qs.get('ch') || '';
+  const token = qs.get('token') || ''; // raw or Bearer …
 
-      consumer.track.addEventListener('ended', ()=> setBadgeLive(false));
-      consumer.track.addEventListener('mute',  ()=> setBadgeLive(false));
-      consumer.track.addEventListener('unmute',()=> setBadgeLive(true));
+  const $status = document.getElementById('status');
+  const $title  = document.getElementById('title');
+  const $host   = document.getElementById('host');
+  const $video  = document.getElementById('video');
+
+  // Helpful labels
+  $title.textContent = ident || '(no id)';
+  $host.textContent  = location.host;
+
+  function setBadge(text, live=false){
+    $status.textContent = text;
+    $status.className = live ? 'pill live' : 'pill';
+    if (window.flutter_inappwebview?.callHandler) {
+      window.flutter_inappwebview.callHandler('playerStatus', { message: text, type: live ? 'live' : 'info' });
     }
+    console.log('[VIEWER]', text);
+  }
 
-    // connect & react to new producers
-    socket.on('connect', async ()=>{ try{ await consumeVideo(); }catch(_){ setBadgeLive(false); } });
-    socket.on('disconnect', ()=> setBadgeLive(false));
-    socket.on('newProducer', async ({kind})=>{
-      if (kind==='video') { try { await consumeVideo(); } catch(_){ setBadgeLive(false); } }
+  // autoplay-friendly defaults
+  try {
+    $video.muted = true;
+    $video.playsInline = true;
+    $video.setAttribute('playsinline','');
+    $video.setAttribute('webkit-playsinline','');
+    $video.autoplay = true;
+  } catch(_) {}
+
+  if (!ident) {
+    setBadge('Missing id/slug', false);
+    throw new Error('Provide ?slug= or ?liveId= or ?id= or ?room=');
+  }
+
+  // Make token accessible for legacy code paths
+  try {
+    if (token) {
+      const bearer = /^Bearer\s+/i.test(token) ? token : ('Bearer ' + token);
+      localStorage.setItem('token', bearer);
+      localStorage.setItem('authToken', bearer.replace(/^Bearer\s+/i,''));
+    }
+  } catch(_) {}
+
+  const socket = io('/', {
+    path: '/socket.io',
+    transports: ['websocket','polling'],
+    withCredentials: true,
+    auth: {
+      role: 'viewer',
+      token: token ? (/^Bearer\s+/i.test(token) ? token : 'Bearer ' + token) : undefined,
+      slug: ident,
+      liveId: ident
+    }
+  });
+
+  socket.on('connect_error', (e) => { console.log('[VIEWER] connect_error', e?.message || e); setBadge('Connect error', false); });
+  socket.on('disconnect',   (r) => { setBadge('Disconnected', false); });
+
+  let device, recvTransport, haveVideo = false;
+
+  async function emitAck(event, payload){
+    return new Promise((resolve, reject) => {
+      socket.timeout(10000).emit(event, payload, (res) => {
+        if (res && res.error) return reject(new Error(res.error));
+        resolve(res);
+      });
     });
-  })();
-  </script>
+  }
+
+  async function ensureDevice() {
+    if (device) return;
+    const routerRtpCapabilities = await emitAck('getRtpCapabilities', null);
+    // Force Chrome74 handler to avoid the null.codecs branch
+    device = new mediasoupClient.Device({ handlerName: 'Chrome74' });
+    await device.load({ routerRtpCapabilities });
+  }
+
+  async function ensureRecvTransport() {
+    if (recvTransport) return;
+    const tInfo = await emitAck('createRecvTransport', null);
+    recvTransport = device.createRecvTransport(tInfo);
+    recvTransport.on('connect', ({ dtlsParameters }, cb, err) => {
+      emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err);
+    });
+  }
+
+  function attachAndPlay(track) {
+    const ms = $video.srcObject || new MediaStream();
+    // Replace old track of same kind
+    ms.getTracks().filter(t => t.kind === track.kind).forEach(t => ms.removeTrack(t));
+    ms.addTrack(track);
+    $video.srcObject = ms;
+
+    // Kick playback (Android WebView needs this)
+    $video.play().catch(()=>{});
+  }
+
+  $video.addEventListener('loadedmetadata', () => {
+    $video.play().catch(()=>{});
+  });
+
+  async function consume(kind) {
+    await ensureDevice();
+    await ensureRecvTransport();
+
+    const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
+    if (res?.error) return false;
+
+    const consumer = await recvTransport.consume({
+      id: res.id,
+      producerId: res.producerId,
+      kind: res.kind,
+      rtpParameters: res.rtpParameters
+    });
+
+    attachAndPlay(consumer.track);
+
+    await emitAck('resume', { consumerId: consumer.id });
+    if (kind === 'video') haveVideo = true;
+    return true;
+  }
+
+  socket.on('connect', async () => {
+    try {
+      setBadge('Connecting…', false);
+      const vOk = await consume('video');
+      await consume('audio').catch(()=>{});
+      setBadge(vOk ? 'LIVE' : 'Waiting…', !!vOk);
+    } catch (e) {
+      console.warn('[VIEWER] error', e);
+      setBadge('Error', false);
+    }
+  });
+
+  socket.on('newProducer', async (p) => {
+    try {
+      if (p.kind === 'video') haveVideo = await consume('video');
+      if (p.kind === 'audio') await consume('audio');
+      setBadge(haveVideo ? 'LIVE' : 'Waiting…', !!haveVideo);
+    } catch (e) {
+      console.warn('[VIEWER] newProducer failed', e);
+    }
+  });
+</script>
 </body>
 </html>
