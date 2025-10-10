@@ -48,9 +48,9 @@ app.use(express.urlencoded({ extended: false }));
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:3000','http://127.0.0.1:3000','https://livenix.htetaungthant.com'],
-    methods: ['GET','POST','PATCH','OPTIONS'],
-    allowedHeaders: ['Content-Type','Authorization']
+    origin: (origin, cb) => cb(null, true),   // allow all origins (good for Flutter WebView)
+    methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
   }
 });
 

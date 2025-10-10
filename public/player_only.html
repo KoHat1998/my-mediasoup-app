@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Livenix • Player</title>
   <style>
-    html,body{height:100%;margin:0;background:#0B0E19;color:#e9f2ff;font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial;}
+    html,body{height:100%;margin:0;background:#0B0E19;color:#E9F2FF;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
     .wrap{display:flex;flex-direction:column;min-height:100%}
     header{padding:10px 14px;border-bottom:1px solid #1e2536;display:flex;gap:10px;align-items:center}
-    header .pill{background:#ff337d;color:#fff;padding:4px 10px;border-radius:999px;font-weight:700}
+    .pill{background:#ff337d;color:#fff;padding:4px 10px;border-radius:999px;font-weight:700;letter-spacing:.2px}
     main{flex:1;display:flex;align-items:center;justify-content:center;padding:12px}
     video{width:min(100vw,100%);max-height:75vh;background:#000;border-radius:12px}
     footer{padding:8px 14px;border-top:1px solid #1e2536;display:flex;justify-content:space-between;font-size:12px;opacity:.85}
@@ -37,17 +37,19 @@
 <script type="module">
   import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
+  // --- Query params from Flutter ---
   const qs   = new URLSearchParams(location.search);
   const slug = qs.get('slug') || qs.get('id') || qs.get('room') || '';
   const rawToken = qs.get('token') || '';
   const token = rawToken ? (/^Bearer\s/i.test(rawToken) ? rawToken : `Bearer ${rawToken}`) : '';
 
-  const $live = document.getElementById('live');
-  const $v    = document.getElementById('v');
-  const $err  = document.getElementById('err');
-  const $title= document.getElementById('title');
+  // --- DOM helpers ---
+  const $live  = document.getElementById('live');
+  const $v     = document.getElementById('v');
+  const $err   = document.getElementById('err');
+  const $title = document.getElementById('title');
 
-  function setLive(text, bad=false) {
+  function setLive(text, bad=false){
     $live.textContent = text;
     $live.style.background = bad ? '#ff285f' : '#22c55e';
   }
@@ -59,13 +61,14 @@
   }
   $title.textContent = 'Viewer: ' + slug;
 
-  // Socket.IO: websocket only (avoids polling/CORS headaches in WebView)
+  // Use websocket only (WebView-friendly)
   const socket = io('/', {
     transports: ['websocket'],
-    auth: { role: 'viewer', token, slug },
+    auth: { role: 'viewer', token, slug }
   });
 
-  socket.on('connect', start).on('connect_error', (e) => {
+  socket.on('connect', start);
+  socket.on('connect_error', (e) => {
     setLive('CONNECT ERROR', true);
     $err.textContent = e?.message || String(e);
   });
@@ -73,33 +76,51 @@
   async function start() {
     try {
       setLive('CONNECTING…');
+
+      // 1) Router RTP caps with strict timeout handling
       const rtpCaps = await emitAck('getRtpCapabilities', null);
+
+      // Guard: caps must exist and include codecs
+      if (!rtpCaps || !Array.isArray(rtpCaps.codecs)) {
+        throw new Error('No RTP capabilities from server');
+      }
+
       const device = new mediasoupClient.Device();
       await device.load({ routerRtpCapabilities: rtpCaps });
 
+      // 2) Create recv transport
       const tInfo = await emitAck('createRecvTransport', null);
       const recvTransport = device.createRecvTransport(tInfo);
       recvTransport.on('connect', ({ dtlsParameters }, cb, err) =>
         emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err)
       );
 
+      // 3) Helper to consume a kind
       async function consume(kind) {
         const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
         if (res?.error) throw new Error(res.error);
+
         const consumer = await recvTransport.consume({
-          id: res.id, producerId: res.producerId, kind: res.kind, rtpParameters: res.rtpParameters
+          id: res.id,
+          producerId: res.producerId,
+          kind: res.kind,
+          rtpParameters: res.rtpParameters
         });
         await emitAck('resume', { consumerId: consumer.id });
+
         if (kind === 'video') $v.srcObject = new MediaStream([consumer.track]);
+        return consumer;
       }
 
-      try { await consume('video'); } catch (e) { console.warn('no video yet', e); }
-      try { await consume('audio'); } catch (e) { console.warn('no audio yet', e); }
+      // 4) Try to start both; ok if one isn’t ready yet
+      try { await consume('video'); } catch (e) { console.warn('video not ready:', e?.message || e); }
+      try { await consume('audio'); } catch (e) { console.warn('audio not ready:', e?.message || e); }
 
       setLive('LIVE');
 
+      // 5) React to new producers
       socket.on('newProducer', async (p) => {
-        try { await consume(p.kind); } catch (e) { console.warn('consume on newProducer failed', e); }
+        try { await consume(p.kind); } catch (e) { console.warn('newProducer failed:', e?.message || e); }
       });
 
     } catch (e) {
@@ -109,10 +130,13 @@
     }
   }
 
+  // Strict ack with timeout → errors on timeout/no response
   function emitAck(event, payload) {
     return new Promise((resolve, reject) => {
-      socket.timeout(8000).emit(event, payload, (res) => {
+      socket.timeout(8000).emit(event, payload, (err, res) => {
+        if (err) return reject(new Error('timeout'));
         if (res && res.error) return reject(new Error(res.error));
+        if (res == null) return reject(new Error('no response'));
         resolve(res);
       });
     });
