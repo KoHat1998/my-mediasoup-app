@@ -7,54 +7,62 @@
   <style>
     html,body{margin:0;padding:0;background:#000;height:100%;width:100%;overflow:hidden}
     video{position:fixed;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+    #badge{
+      position:fixed;top:10px;left:10px;z-index:10;
+      padding:4px 10px;border-radius:999px;
+      font:12px/1 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+      color:#fff;background:#ef4444; /* OFFLINE = red */
+      user-select:none;pointer-events:none;
+    }
+    #badge.live{background:#2563eb;} /* LIVE = blue */
   </style>
 </head>
 <body>
+  <div id="badge">OFFLINE</div>
   <video id="v" playsinline autoplay muted></video>
 
-  <!-- Socket.IO client from your Node server -->
   <script src="/socket.io/socket.io.js"></script>
 
-  <!-- Minimal safety shim for Android WebView to avoid null capabilities -->
+  <!-- Android WebView safety shim to avoid null getCapabilities -> 'codecs' crash -->
   <script>
   (function(){
-    function fixCaps(v){ if(!v||typeof v!=='object') v={}; if(!Array.isArray(v.codecs)) v.codecs=[]; if(!Array.isArray(v.headerExtensions)) v.headerExtensions=[]; return v; }
-    if (window.RTCRtpReceiver && typeof RTCRtpReceiver.getCapabilities==='function'){
-      const orig=RTCRtpReceiver.getCapabilities.bind(RTCRtpReceiver);
-      RTCRtpReceiver.getCapabilities=(k)=>{ try{return fixCaps(orig(k));}catch(_){return fixCaps(null);} };
+    function caps(x){ if(!x||typeof x!=='object') x={}; if(!Array.isArray(x.codecs)) x.codecs=[]; if(!Array.isArray(x.headerExtensions)) x.headerExtensions=[]; return x; }
+    if (window.RTCRtpReceiver?.getCapabilities){
+      const o=RTCRtpReceiver.getCapabilities.bind(RTCRtpReceiver);
+      RTCRtpReceiver.getCapabilities=(k)=>{ try{return caps(o(k));}catch(_){return caps(null);} };
     }
-    if (window.RTCRtpSender && typeof RTCRtpSender.getCapabilities==='function'){
-      const orig=RTCRtpSender.getCapabilities.bind(RTCRtpSender);
-      RTCRtpSender.getCapabilities=(k)=>{ try{return fixCaps(orig(k));}catch(_){return fixCaps(null);} };
+    if (window.RTCRtpSender?.getCapabilities){
+      const o=RTCRtpSender.getCapabilities.bind(RTCRtpSender);
+      RTCRtpSender.getCapabilities=(k)=>{ try{return caps(o(k));}catch(_){return caps(null);} };
     }
   })();
   </script>
 
-  <!-- Viewer: video only -->
+  <!-- Minimal mediasoup viewer with LIVE/OFFLINE badge -->
   <script type="module">
   (async () => {
     const $v = document.getElementById('v');
-    // autoplay-friendly defaults (no audio UI; we won’t attach audio)
-    try {
-      $v.autoplay = true;
-      $v.muted = true;                 // keep muted; video only
-      $v.playsInline = true;
-      $v.setAttribute('playsinline','');
-      $v.setAttribute('webkit-playsinline','');
-    } catch (_) {}
+    const $badge = document.getElementById('badge');
 
-    // Import mediasoup-client
-    let mediasoupClient = await import('https://esm.sh/mediasoup-client@3');
-    mediasoupClient = mediasoupClient?.default ?? mediasoupClient;
+    // autoplay-friendly defaults (video-only; keep muted)
+    $v.autoplay = true;
+    $v.muted = true;
+    $v.playsInline = true;
+    $v.setAttribute('playsinline','');
+    $v.setAttribute('webkit-playsinline','');
 
-    // Resolve identifiers from query
+    // import mediasoup-client
+    let m = await import('https://esm.sh/mediasoup-client@3');
+    const mediasoupClient = m?.default ?? m;
+
+    // read query params from Flutter URL
     const qs = new URLSearchParams(location.search);
     const ident = qs.get('slug') || qs.get('liveId') || qs.get('id') || qs.get('room') || qs.get('ch') || '';
-    if (!ident) return; // nothing to play
-    const tokenRaw = qs.get('token') || '';
-    const token = tokenRaw ? (/^Bearer\s+/i.test(tokenRaw) ? tokenRaw : ('Bearer '+tokenRaw)) : undefined;
+    if (!ident) { $badge.textContent='OFFLINE'; $badge.classList.remove('live'); return; }
+    const rawTok = qs.get('token') || '';
+    const token = rawTok ? (/^Bearer\s+/i.test(rawTok) ? rawTok : ('Bearer '+rawTok)) : undefined;
 
-    // Socket.IO connection
+    // socket.io
     const socket = io('/', {
       path: '/socket.io',
       transports: ['websocket','polling'],
@@ -65,14 +73,12 @@
     // mediasoup state
     let device, recvTransport, videoConsumer;
 
-    function emitAck(event, payload){
-      return new Promise((resolve,reject)=>{
-        socket.timeout(10000).emit(event, payload, (res)=>{
-          if (res && res.error) return reject(new Error(res.error));
-          resolve(res);
-        });
+    const emitAck = (ev, data) => new Promise((res,rej)=>{
+      socket.timeout(10000).emit(ev, data, (r)=>{
+        if (r && r.error) return rej(new Error(r.error));
+        res(r);
       });
-    }
+    });
 
     async function ensureDevice(){
       if (device) return;
@@ -90,6 +96,11 @@
       });
     }
 
+    function setBadgeLive(live){
+      if (live) { $badge.textContent='LIVE'; $badge.classList.add('live'); }
+      else { $badge.textContent='OFFLINE'; $badge.classList.remove('live'); }
+    }
+
     async function consumeVideo(){
       await ensureDevice();
       await ensureRecvTransport();
@@ -97,49 +108,42 @@
       const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind: 'video' });
       if (res?.error) throw new Error(res.error);
 
+      // close previous
+      try { videoConsumer?.close(); } catch(_){}
+
       const consumer = await recvTransport.consume({
-        id: res.id,
-        producerId: res.producerId,
-        kind: 'video',
-        rtpParameters: res.rtpParameters
+        id: res.id, producerId: res.producerId, kind: 'video', rtpParameters: res.rtpParameters
       });
 
       const attach = async () => {
         const ms = new MediaStream([consumer.track]);
         $v.srcObject = ms;
         try { await $v.play(); } catch (_) {}
+        setBadgeLive(true);
       };
 
-      if (consumer.track.readyState === 'live') {
-        await attach();
-      } else {
+      if (consumer.track.readyState === 'live') attach();
+      else {
         const onUnmute = async () => { consumer.track.removeEventListener('unmute', onUnmute); await attach(); };
         consumer.track.addEventListener('unmute', onUnmute);
       }
 
       await emitAck('resume', { consumerId: consumer.id }).catch(()=>{});
       try { await consumer.requestKeyFrame(); } catch(_) {}
-      try { socket.emit('setPreferredLayers', { spatialLayer: 1 }, () => {}); } catch (_) {}
+      try { socket.emit('setPreferredLayers', { spatialLayer: 1 }, () => {}); } catch(_){}
 
       videoConsumer = consumer;
-      // Basic health logs (kept in console only)
-      consumer.track.addEventListener('ended', ()=>console.log('[viewer] video ended'));
-      consumer.track.addEventListener('mute',  ()=>console.log('[viewer] video mute'));
-      consumer.track.addEventListener('unmute',()=>console.log('[viewer] video unmute'));
+
+      consumer.track.addEventListener('ended', ()=> setBadgeLive(false));
+      consumer.track.addEventListener('mute',  ()=> setBadgeLive(false));
+      consumer.track.addEventListener('unmute',()=> setBadgeLive(true));
     }
 
-    socket.on('connect', async ()=>{
-      try { await consumeVideo(); } catch(e) { console.warn('consume video failed:', e); }
-    });
-
-    socket.on('newProducer', async ({ kind })=>{
-      if (kind === 'video') {
-        try {
-          // swap to the new one
-          try { videoConsumer?.close(); } catch(_){}
-          await consumeVideo();
-        } catch(e){ console.warn('newProducer video failed:', e); }
-      }
+    // connect & react to new producers
+    socket.on('connect', async ()=>{ try{ await consumeVideo(); }catch(_){ setBadgeLive(false); } });
+    socket.on('disconnect', ()=> setBadgeLive(false));
+    socket.on('newProducer', async ({kind})=>{
+      if (kind==='video') { try { await consumeVideo(); } catch(_){ setBadgeLive(false); } }
     });
   })();
   </script>
