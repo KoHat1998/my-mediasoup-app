@@ -14,12 +14,10 @@
     video { width:100vw; height:calc(100vh - 88px); object-fit:contain; background:#000; }
     .row { display:flex; gap:8px; align-items:center; }
     .pill { padding:4px 8px; border-radius:999px; font-size:12px; background:#2563eb; color:white; }
-    .pill.bad { background:#ef4444; }
     footer { padding:8px 14px; border-top:1px solid #00000022; display:flex; justify-content:space-between; align-items:center; font-size:12px; color:#ddd; background:#0b0b0b; }
     .muted { opacity:.8 }
     button { padding:8px 12px; border-radius:8px; border:1px solid #00000033; background:#111827; color:white; cursor:pointer; }
     button:disabled{ opacity:.5; cursor:not-allowed; }
-    pre.log { color:#9ca3af; font:12px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin:8px 14px; white-space:pre-wrap }
   </style>
 </head>
 <body>
@@ -36,189 +34,183 @@
     <div class="muted">Press play if your browser blocks autoplay.</div>
     <div><button id="unmute">Unmute</button></div>
   </footer>
-  <pre class="log" id="log"></pre>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
 
-<!-- Strong Android WebView shim: ensure non-empty codecs for mediasoup-client -->
+<!-- WebView safety shims (must run before mediasoup-client import) -->
 <script>
-/* Strong WebView shim: guarantee non-empty RTP capabilities for mediasoup-client */
 (function () {
-  function synthCaps(kind) {
+  function defaultCaps(kind){
     if (kind === 'audio') {
       return { codecs: [{ mimeType: 'audio/opus', clockRate: 48000, channels: 2 }], headerExtensions: [] };
     }
     return {
       codecs: [
         { mimeType: 'video/VP8',  clockRate: 90000 },
-        { mimeType: 'video/H264', clockRate: 90000,
-          sdpFmtpLine: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f' }
+        { mimeType: 'video/H264', clockRate: 90000, parameters: { 'level-asymmetry-allowed': 1, 'packetization-mode': 1, 'profile-level-id': '42e01f' } }
       ],
       headerExtensions: []
     };
   }
-  function ensureCaps(v, kind) {
-    if (!v || typeof v !== 'object') return synthCaps(kind);
-    if (!Array.isArray(v.codecs) || v.codecs.length === 0) v.codecs = synthCaps(kind).codecs;
-    if (!Array.isArray(v.headerExtensions)) v.headerExtensions = [];
-    return v;
+  function wrapCaps(obj, fn) {
+    try {
+      const base = obj && obj[fn] && obj[fn].bind(obj);
+      obj[fn] = function(kind){
+        try {
+          const v = base ? base(kind) : null;
+          if (v && typeof v === 'object' && Array.isArray(v.codecs)) return v;
+        } catch(e){}
+        return defaultCaps(kind);
+      };
+    } catch (_) {}
   }
+  if (!window.RTCRtpReceiver) window.RTCRtpReceiver = {};
+  if (!window.RTCRtpSender)   window.RTCRtpSender   = {};
+  wrapCaps(window.RTCRtpReceiver, 'getCapabilities');
+  wrapCaps(window.RTCRtpSender,   'getCapabilities');
 
-  // Make sure the globals exist
-  if (!('RTCRtpReceiver' in window)) { window.RTCRtpReceiver = function(){}; }
-  if (!('RTCRtpSender'   in window)) { window.RTCRtpSender   = function(){}; }
-
-  // Patch/define static getCapabilities on both
-  (function patchReceiver(){
-    const orig = (window.RTCRtpReceiver && window.RTCRtpReceiver.getCapabilities) ? window.RTCRtpReceiver.getCapabilities.bind(window.RTCRtpReceiver) : null;
-    window.RTCRtpReceiver.getCapabilities = function (kind) {
-      try { return ensureCaps(orig ? orig(kind) : null, kind); }
-      catch (_) { return synthCaps(kind); }
-    };
-  })();
-
-  (function patchSender(){
-    const orig = (window.RTCRtpSender && window.RTCRtpSender.getCapabilities) ? window.RTCRtpSender.getCapabilities.bind(window.RTCRtpSender) : null;
-    window.RTCRtpSender.getCapabilities = function (kind) {
-      try { return ensureCaps(orig ? orig(kind) : null, kind); }
-      catch (_) { return synthCaps(kind); }
-    };
-  })();
-
-  // Defensive: some code paths check MediaSource; keep this safe too
   if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
-    const orig = MediaSource.isTypeSupported.bind(MediaSource);
-    MediaSource.isTypeSupported = (type) => { try { return orig(type); } catch (_) { return false; } };
+    try {
+      const orig = MediaSource.isTypeSupported.bind(MediaSource);
+      MediaSource.isTypeSupported = (t)=>{ try { return orig(t); } catch(_) { return false; } };
+    } catch(_) {}
   }
 })();
 </script>
 
-
-<!-- Viewer logic -->
 <script type="module">
   import * as mediasoupClientNS from 'https://esm.sh/mediasoup-client@3';
   const mediasoupClient = mediasoupClientNS?.default ?? mediasoupClientNS;
+
+  const qs = new URLSearchParams(location.search);
+  const ident = qs.get('slug') || qs.get('liveId') || qs.get('id') || qs.get('room') || qs.get('ch') || '';
+  const token = qs.get('token') || ''; // raw or Bearer ...
 
   const $status = document.getElementById('status');
   const $title  = document.getElementById('title');
   const $info   = document.getElementById('info');
   const $video  = document.getElementById('video');
   const $unmute = document.getElementById('unmute');
-  const $log    = document.getElementById('log');
-
-  const log = (...a) => { console.log('[VIEWER]', ...a); try{$log.textContent += a.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' ') + '\n';}catch(_){} };
-  const setStatus = (s, bad=false) => { $status.textContent = s; $status.className = 'pill' + (bad ? ' bad' : ''); };
-
-  try {
-    $video.muted = true;
-    $video.playsInline = true;
-    $video.setAttribute('playsinline','');
-    $video.setAttribute('webkit-playsinline','');
-    $video.autoplay = true;
-  } catch (_) {}
-
-  const qs = new URLSearchParams(location.search);
-  const ident = qs.get('slug') || qs.get('liveId') || qs.get('id') || qs.get('room') || qs.get('ch') || '';
-  const tokenQS = qs.get('token') || ''; // raw or "Bearer ..."
 
   $title.textContent = 'Viewer: ' + (ident || '(no id)');
   $info.textContent  = location.host;
 
-  if (!ident) { setStatus('Missing id/slug', true); throw new Error('missing ident'); }
+  function say(msg, type='info'){
+    $status.textContent = msg;
+    $status.style.background = type === 'error' ? '#ef4444' : '#2563eb';
+    if (window.flutter_inappwebview?.callHandler) {
+      window.flutter_inappwebview.callHandler('playerStatus', { message: msg, type });
+    }
+    console.log('[VIEWER]', msg);
+  }
 
-  const bearerToken = tokenQS ? (/^Bearer\s+/i.test(tokenQS) ? tokenQS : ('Bearer ' + tokenQS)) : undefined;
+  if (!ident) {
+    say('Missing id/slug', 'error');
+    throw new Error('Provide ?slug= or ?liveId= or ?id= or ?room=');
+  }
 
-  setStatus('Connecting…');
+  try {
+    if (token) {
+      const bearer = /^Bearer\s+/i.test(token) ? token : ('Bearer ' + token);
+      localStorage.setItem('token', bearer);
+      localStorage.setItem('authToken', bearer.replace(/^Bearer\s+/i,''));
+    }
+  } catch(_) {}
+
+  say('Connecting…');
   const socket = io('/', {
     path: '/socket.io',
-    transports: ['websocket', 'polling'],
+    transports: ['websocket','polling'],
     withCredentials: true,
-    auth: { role: 'viewer', token: bearerToken, slug: ident, liveId: ident }
-  });
-
-  socket.on('connect_error', (e) => { log('connect_error', e?.message || e); setStatus('Connect error: ' + (e?.message || e), true); });
-  socket.on('disconnect', (r) => { log('disconnect', r); setStatus('Disconnected', true); });
-
-  socket.on('connect', async () => {
-    try {
-      setStatus('Loading caps…');
-      const rtpCaps = await emitAck('getRtpCapabilities', null);
-      log('router caps OK');
-
-      // Detect Android/Flutter WebView
-const isWebView = !!(window.flutter_inappwebview) ||
-                  /\bwv\b/i.test(navigator.userAgent) ||
-                  /; wv\)/i.test(navigator.userAgent);
-
-// Try a handler that does not rely on getCapabilities (Safari12).
-let device;
-try {
-  device = new mediasoupClient.Device({ handlerName: isWebView ? 'Safari12' : undefined });
-  await device.load({ routerRtpCapabilities: rtpCaps });
-  console.log('[VIEWER] device loaded with', device.handlerName || 'auto');
-} catch (e1) {
-  console.warn('[VIEWER] Safari12 handler failed, retrying with Chrome74', e1);
-  try {
-    device = new mediasoupClient.Device({ handlerName: 'Chrome74' });
-    await device.load({ routerRtpCapabilities: rtpCaps });
-    console.log('[VIEWER] device loaded with Chrome74');
-  } catch (e2) {
-    console.error('[VIEWER] device load failed', e2);
-    setStatus('Error: ' + (e2?.message || e2), true);
-    return; // stop here
-  }
-}
-
-      log('device loaded', device.rtpCapabilities?.codecs?.map(c=>c.mimeType));
-
-      setStatus('Creating transport…');
-      const tInfo = await emitAck('createRecvTransport', null);
-      const recvTransport = device.createRecvTransport(tInfo);
-      recvTransport.on('connect', ({ dtlsParameters }, cb, err) => emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err));
-
-      async function consumeKind(kind) {
-        const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
-        if (res?.error) { log('consume error', kind, res.error); setStatus(`Error: ${res.error}`, true); return null; }
-        const consumer = await recvTransport.consume(res);
-        const stream = $video.srcObject || new MediaStream();
-        stream.addTrack(consumer.track);
-        $video.srcObject = stream;
-        await emitAck('resume', { consumerId: consumer.id });
-        log('consuming', kind);
-        return consumer;
-      }
-
-      setStatus('Starting video…');
-      await consumeKind('video'); // if no producer yet, server tells us
-
-      setStatus('Starting audio…');
-      await consumeKind('audio');
-
-      setStatus('LIVE');
-
-      socket.on('newProducer', async (p) => {
-        try {
-          log('newProducer', p);
-          await consumeKind(p.kind);
-          setStatus('LIVE');
-        } catch(e) { log('newProducer failed', e); }
-      });
-
-    } catch (e) {
-      log('fatal error', e);
-      setStatus('Error: ' + (e?.message || e), true);
+    auth: {
+      role: 'viewer',
+      token: token ? (/^Bearer\s+/i.test(token) ? token : 'Bearer ' + token) : undefined,
+      slug: ident,
+      liveId: ident
     }
   });
 
-  function emitAck(event, payload){
-    return new Promise((resolve) => {
-      socket.timeout(8000).emit(event, payload, (res) => resolve(res));
+  socket.on('connect_error', (e) => { console.log('[VIEWER] connect_error', e?.message || e); say('Connect error', 'error'); });
+  socket.on('disconnect',   (r) => { say('Disconnected: ' + r, 'error'); });
+
+  // mediasoup pipeline (force handler Chrome74 so we skip WebView detection path)
+  let device, recvTransport;
+
+  async function emitAck(event, payload){
+    return new Promise((resolve, reject) => {
+      socket.timeout(10000).emit(event, payload, (res) => {
+        if (res && res.error) return reject(new Error(res.error));
+        resolve(res);
+      });
     });
   }
 
+  async function ensureDevice() {
+    if (device) return;
+    say('Loading caps…');
+    const routerRtpCapabilities = await emitAck('getRtpCapabilities', null);
+    device = new mediasoupClient.Device({ handlerName: 'Chrome74' });
+    await device.load({ routerRtpCapabilities });
+    console.log('[VIEWER] device loaded with handler Chrome74');
+  }
+
+  async function ensureRecvTransport() {
+    if (recvTransport) return;
+    say('Creating transport…');
+    const tInfo = await emitAck('createRecvTransport', null);
+    recvTransport = device.createRecvTransport(tInfo);
+    recvTransport.on('connect', ({ dtlsParameters }, cb, err) => {
+      emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err);
+    });
+  }
+
+  async function consume(kind) {
+    await ensureDevice();
+    await ensureRecvTransport();
+
+    const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
+    if (res?.error) throw new Error(res.error);
+
+    const consumer = await recvTransport.consume({
+      id: res.id,
+      producerId: res.producerId,
+      kind: res.kind,
+      rtpParameters: res.rtpParameters
+    });
+
+    const ms = $video.srcObject || new MediaStream();
+    ms.addTrack(consumer.track);
+    $video.srcObject = ms;
+
+    await emitAck('resume', { consumerId: consumer.id });
+    return consumer;
+  }
+
+  socket.on('connect', async () => {
+    try {
+      await consume('video').catch(()=>{});
+      await consume('audio').catch(()=>{});
+      say('LIVE');
+    } catch (e) {
+      console.warn('[VIEWER] fatal error', e);
+      say('Error: ' + (e?.message || e), 'error');
+      alert('Viewer error: ' + (e?.message || e));
+    }
+  });
+
+  socket.on('newProducer', async (p) => {
+    try {
+      if (p.kind === 'video') await consume('video');
+      if (p.kind === 'audio') await consume('audio');
+      say('LIVE');
+    } catch (e) {
+      console.warn('[VIEWER] newProducer consume failed', e);
+    }
+  });
+
   $unmute.addEventListener('click', async () => {
-    try { $video.muted = false; await $video.play().catch(()=>{}); } catch (_) {}
+    try { $video.muted = false; await $video.play().catch(()=>{}); } catch(_) {}
   });
 </script>
 </body>
