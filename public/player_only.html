@@ -38,32 +38,43 @@
 
 <script src="/socket.io/socket.io.js"></script>
 
-<!-- Android WebView safety shims (must run BEFORE mediasoup-client) -->
+<!-- Strong Android WebView shim: ensure non-empty codecs for mediasoup-client -->
 <script>
 (function () {
-  function ensureCaps(v) {
-    if (!v || typeof v !== 'object') return { codecs: [], headerExtensions: [] };
-    if (!Array.isArray(v.codecs)) v.codecs = [];
+  function synthCaps(kind) {
+    if (kind === 'audio') {
+      return { codecs: [{ mimeType: 'audio/opus', clockRate: 48000, channels: 2 }], headerExtensions: [] };
+    }
+    // video
+    return {
+      codecs: [
+        { mimeType: 'video/VP8',  clockRate: 90000 },
+        { mimeType: 'video/H264', clockRate: 90000, sdpFmtpLine: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f' }
+      ],
+      headerExtensions: []
+    };
+  }
+  function ensureCaps(v, kind) {
+    if (!v || typeof v !== 'object') return synthCaps(kind);
+    if (!Array.isArray(v.codecs) || v.codecs.length === 0) v.codecs = synthCaps(kind).codecs;
     if (!Array.isArray(v.headerExtensions)) v.headerExtensions = [];
     return v;
   }
   if (window.RTCRtpReceiver && typeof RTCRtpReceiver.getCapabilities === 'function') {
     const orig = RTCRtpReceiver.getCapabilities.bind(RTCRtpReceiver);
     RTCRtpReceiver.getCapabilities = (kind) => {
-      try { return ensureCaps(orig(kind)); } catch (_) { return ensureCaps(null); }
+      try { return ensureCaps(orig(kind), kind); } catch (_) { return synthCaps(kind); }
     };
   }
   if (window.RTCRtpSender && typeof RTCRtpSender.getCapabilities === 'function') {
     const orig = RTCRtpSender.getCapabilities.bind(RTCRtpSender);
     RTCRtpSender.getCapabilities = (kind) => {
-      try { return ensureCaps(orig(kind)); } catch (_) { return ensureCaps(null); }
+      try { return ensureCaps(orig(kind), kind); } catch (_) { return synthCaps(kind); }
     };
   }
   if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
     const orig = MediaSource.isTypeSupported.bind(MediaSource);
-    MediaSource.isTypeSupported = (type) => {
-      try { return orig(type); } catch (_) { return false; }
-    };
+    MediaSource.isTypeSupported = (type) => { try { return orig(type); } catch (_) { return false; } };
   }
 })();
 </script>
@@ -73,14 +84,12 @@
   import * as mediasoupClientNS from 'https://esm.sh/mediasoup-client@3';
   const mediasoupClient = mediasoupClientNS?.default ?? mediasoupClientNS;
 
-  // DOM
   const $status = document.getElementById('status');
   const $title  = document.getElementById('title');
   const $info   = document.getElementById('info');
   const $video  = document.getElementById('video');
   const $unmute = document.getElementById('unmute');
 
-  // autoplay-friendly defaults
   try {
     $video.muted = true;
     $video.playsInline = true;
@@ -106,28 +115,17 @@
     throw new Error('Provide ?slug= or ?liveId= or ?id= or ?room=');
   }
 
-  // Build bearer for server; accept raw or already-bearer token from query
   const bearerToken = tokenQS ? (/^Bearer\s+/i.test(tokenQS) ? tokenQS : ('Bearer ' + tokenQS)) : undefined;
 
-  // ---- Socket.IO ----
   setStatus('Connecting…');
   const socket = io('/', {
     path: '/socket.io',
     transports: ['websocket', 'polling'],
     withCredentials: true,
-    auth: {
-      role: 'viewer',
-      token: bearerToken,
-      slug: ident,
-      liveId: ident
-    }
+    auth: { role: 'viewer', token: bearerToken, slug: ident, liveId: ident }
   });
 
-  socket.on('connect_error', (e) => {
-    console.error('connect_error', e);
-    setStatus('Connect error', true);
-  });
-
+  socket.on('connect_error', (e) => { console.error('connect_error', e); setStatus('Connect error', true); });
   socket.on('disconnect', () => setStatus('Disconnected', true));
 
   socket.on('connect', async () => {
@@ -150,10 +148,7 @@
         const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
         if (res?.error) throw new Error(res.error);
         const consumer = await recvTransport.consume({
-          id: res.id,
-          producerId: res.producerId,
-          kind: res.kind,
-          rtpParameters: res.rtpParameters
+          id: res.id, producerId: res.producerId, kind: res.kind, rtpParameters: res.rtpParameters
         });
         const stream = $video.srcObject || new MediaStream();
         stream.addTrack(consumer.track);
@@ -180,8 +175,7 @@
 
     } catch (e) {
       console.error(e);
-      setStatus('Error', true);
-      alert('Viewer error: ' + (e?.message || e));
+      setStatus('Error', true);   // removed alert()
     }
   });
 
