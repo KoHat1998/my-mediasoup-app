@@ -146,8 +146,30 @@
       const rtpCaps = await emitAck('getRtpCapabilities', null);
       log('router caps OK');
 
-      const device = new mediasoupClient.Device();
-      await device.load({ routerRtpCapabilities: rtpCaps });
+      // Detect Android/Flutter WebView
+const isWebView = !!(window.flutter_inappwebview) ||
+                  /\bwv\b/i.test(navigator.userAgent) ||
+                  /; wv\)/i.test(navigator.userAgent);
+
+// Try a handler that does not rely on getCapabilities (Safari12).
+let device;
+try {
+  device = new mediasoupClient.Device({ handlerName: isWebView ? 'Safari12' : undefined });
+  await device.load({ routerRtpCapabilities: rtpCaps });
+  console.log('[VIEWER] device loaded with', device.handlerName || 'auto');
+} catch (e1) {
+  console.warn('[VIEWER] Safari12 handler failed, retrying with Chrome74', e1);
+  try {
+    device = new mediasoupClient.Device({ handlerName: 'Chrome74' });
+    await device.load({ routerRtpCapabilities: rtpCaps });
+    console.log('[VIEWER] device loaded with Chrome74');
+  } catch (e2) {
+    console.error('[VIEWER] device load failed', e2);
+    setStatus('Error: ' + (e2?.message || e2), true);
+    return; // stop here
+  }
+}
+
       log('device loaded', device.rtpCapabilities?.codecs?.map(c=>c.mimeType));
 
       setStatus('Creating transport…');
