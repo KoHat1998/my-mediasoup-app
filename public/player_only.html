@@ -14,10 +14,12 @@
     video { width:100vw; height:calc(100vh - 88px); object-fit:contain; background:#000; }
     .row { display:flex; gap:8px; align-items:center; }
     .pill { padding:4px 8px; border-radius:999px; font-size:12px; background:#2563eb; color:white; }
+    .pill.bad { background:#ef4444; }
     footer { padding:8px 14px; border-top:1px solid #00000022; display:flex; justify-content:space-between; align-items:center; font-size:12px; color:#ddd; background:#0b0b0b; }
     .muted { opacity:.8 }
     button { padding:8px 12px; border-radius:8px; border:1px solid #00000033; background:#111827; color:white; cursor:pointer; }
     button:disabled{ opacity:.5; cursor:not-allowed; }
+    pre.log { color:#9ca3af; font:12px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin:8px 14px; white-space:pre-wrap }
   </style>
 </head>
 <body>
@@ -34,6 +36,7 @@
     <div class="muted">Press play if your browser blocks autoplay.</div>
     <div><button id="unmute">Unmute</button></div>
   </footer>
+  <pre class="log" id="log"></pre>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
@@ -45,7 +48,6 @@
     if (kind === 'audio') {
       return { codecs: [{ mimeType: 'audio/opus', clockRate: 48000, channels: 2 }], headerExtensions: [] };
     }
-    // video
     return {
       codecs: [
         { mimeType: 'video/VP8',  clockRate: 90000 },
@@ -72,10 +74,6 @@
       try { return ensureCaps(orig(kind), kind); } catch (_) { return synthCaps(kind); }
     };
   }
-  if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
-    const orig = MediaSource.isTypeSupported.bind(MediaSource);
-    MediaSource.isTypeSupported = (type) => { try { return orig(type); } catch (_) { return false; } };
-  }
 })();
 </script>
 
@@ -89,6 +87,10 @@
   const $info   = document.getElementById('info');
   const $video  = document.getElementById('video');
   const $unmute = document.getElementById('unmute');
+  const $log    = document.getElementById('log');
+
+  const log = (...a) => { console.log('[VIEWER]', ...a); try{$log.textContent += a.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' ') + '\n';}catch(_){} };
+  const setStatus = (s, bad=false) => { $status.textContent = s; $status.className = 'pill' + (bad ? ' bad' : ''); };
 
   try {
     $video.muted = true;
@@ -105,15 +107,7 @@
   $title.textContent = 'Viewer: ' + (ident || '(no id)');
   $info.textContent  = location.host;
 
-  function setStatus(s, bad=false){
-    $status.textContent = s;
-    $status.style.background = bad ? '#ef4444' : '#2563eb';
-  }
-
-  if (!ident) {
-    setStatus('Missing id/slug', true);
-    throw new Error('Provide ?slug= or ?liveId= or ?id= or ?room=');
-  }
+  if (!ident) { setStatus('Missing id/slug', true); throw new Error('missing ident'); }
 
   const bearerToken = tokenQS ? (/^Bearer\s+/i.test(tokenQS) ? tokenQS : ('Bearer ' + tokenQS)) : undefined;
 
@@ -125,74 +119,66 @@
     auth: { role: 'viewer', token: bearerToken, slug: ident, liveId: ident }
   });
 
-  socket.on('connect_error', (e) => { console.error('connect_error', e); setStatus('Connect error', true); });
-  socket.on('disconnect', () => setStatus('Disconnected', true));
+  socket.on('connect_error', (e) => { log('connect_error', e?.message || e); setStatus('Connect error: ' + (e?.message || e), true); });
+  socket.on('disconnect', (r) => { log('disconnect', r); setStatus('Disconnected', true); });
 
   socket.on('connect', async () => {
     try {
       setStatus('Loading caps…');
       const rtpCaps = await emitAck('getRtpCapabilities', null);
+      log('router caps OK');
 
       const device = new mediasoupClient.Device();
       await device.load({ routerRtpCapabilities: rtpCaps });
+      log('device loaded', device.rtpCapabilities?.codecs?.map(c=>c.mimeType));
 
       setStatus('Creating transport…');
       const tInfo = await emitAck('createRecvTransport', null);
       const recvTransport = device.createRecvTransport(tInfo);
-
-      recvTransport.on('connect', ({ dtlsParameters }, cb, err) => {
-        emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err);
-      });
+      recvTransport.on('connect', ({ dtlsParameters }, cb, err) => emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err));
 
       async function consumeKind(kind) {
         const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
-        if (res?.error) throw new Error(res.error);
-        const consumer = await recvTransport.consume({
-          id: res.id, producerId: res.producerId, kind: res.kind, rtpParameters: res.rtpParameters
-        });
+        if (res?.error) { log('consume error', kind, res.error); setStatus(`Error: ${res.error}`, true); return null; }
+        const consumer = await recvTransport.consume(res);
         const stream = $video.srcObject || new MediaStream();
         stream.addTrack(consumer.track);
         $video.srcObject = stream;
         await emitAck('resume', { consumerId: consumer.id });
+        log('consuming', kind);
         return consumer;
       }
 
       setStatus('Starting video…');
-      try { await consumeKind('video'); } catch(e){ console.warn('video:', e); }
+      await consumeKind('video'); // if no producer yet, server tells us
 
       setStatus('Starting audio…');
-      try { await consumeKind('audio'); } catch(e){ console.warn('audio:', e); }
+      await consumeKind('audio');
 
       setStatus('LIVE');
 
       socket.on('newProducer', async (p) => {
         try {
-          if (p.kind === 'video') { await consumeKind('video'); }
-          if (p.kind === 'audio') { await consumeKind('audio'); }
+          log('newProducer', p);
+          await consumeKind(p.kind);
           setStatus('LIVE');
-        } catch(e) { console.warn('newProducer consume failed:', e); }
+        } catch(e) { log('newProducer failed', e); }
       });
 
     } catch (e) {
-      console.error(e);
-      setStatus('Error', true);   // removed alert()
+      log('fatal error', e);
+      setStatus('Error: ' + (e?.message || e), true);
     }
   });
 
   function emitAck(event, payload){
-    return new Promise((resolve, reject) => {
-      socket.timeout(8000).emit(event, payload, (res) => {
-        if (res && res.error) return reject(new Error(res.error));
-        resolve(res);
-      });
+    return new Promise((resolve) => {
+      socket.timeout(8000).emit(event, payload, (res) => resolve(res));
     });
   }
 
   $unmute.addEventListener('click', async () => {
-    try {
-      $video.muted = false;
-      await $video.play().catch(()=>{});
-    } catch (_) {}
+    try { $video.muted = false; await $video.play().catch(()=>{}); } catch (_) {}
   });
 </script>
 </body>
