@@ -3,27 +3,26 @@
   'use strict';
 
   // -------- Auth guard --------
-  const token =
+  const rawToken =
     localStorage.getItem('token') ||
     localStorage.getItem('authToken') ||
     '';
-
-  if (!token) {
+  if (!rawToken) {
     location.replace('/signin.html');
     return;
   }
+  const AUTH = /^Bearer\s/i.test(rawToken) ? rawToken : `Bearer ${rawToken}`;
 
   // -------- DOM refs --------
   const listEl  = document.getElementById('list');
   const emptyEl = document.getElementById('empty');
   const hintEl  = document.getElementById('hint');
 
-  // Header UI
+  const userEmail = document.getElementById('userEmail');
   const email =
     (JSON.parse(localStorage.getItem('user') || '{}').email) ||
     localStorage.getItem('email') ||
     '';
-  const userEmail = document.getElementById('userEmail');
   if (email) userEmail.textContent = email;
 
   document.getElementById('signout').onclick = () => {
@@ -31,39 +30,89 @@
     location.replace('/signin.html');
   };
 
-  // -------- Helpers --------
-  function escapeHtml(s = '') {
-    return s.replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    })[c]);
-  }
+  // Optional controls from lives.html (safe if not present)
+  const searchInput = document.getElementById('search');
+  const sortSelect  = document.getElementById('sort');
 
-  function liveTile(l) {
+  // -------- State --------
+  let livesData = [];       // raw items from API
+  let filterText = '';      // simple text filter
+  let sortMode = 'recent';  // 'recent' | 'title'
+
+  // -------- Helpers --------
+  const escapeHtml = (s = '') =>
+    s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  const fmtDate = (iso) => {
+    try { return new Date(iso).toLocaleString(); }
+    catch { return iso || ''; }
+  };
+
+  const liveTile = (l) => {
     const title = escapeHtml(l.title || 'Untitled Live');
-    const started = new Date(l.createdAt).toLocaleString();
+    const started = fmtDate(l.createdAt);
     const watchUrl = `/viewer.html?slug=${encodeURIComponent(l.slug)}`;
     const copyFn = `copySlug('${encodeURIComponent(l.slug)}')`;
     return `
       <div class="tile">
         <div class="badges"><span class="badge live">LIVE</span></div>
-        <h3 class="title">${title}</h3>
-        <p class="meta">Started ${started}</p>
+        <h3 class="title" title="${title}">${title}</h3>
+        <p class="meta">Started ${escapeHtml(started)}</p>
         <div style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap">
           <a class="btn ghost" href="${watchUrl}">Watch</a>
           <button class="btn link" onclick="${copyFn}">Copy link</button>
         </div>
       </div>
     `;
-  }
+  };
 
+  const applyFilterSort = (items) => {
+    let arr = Array.isArray(items) ? items.slice() : [];
+    const q = filterText.trim().toLowerCase();
+
+    if (q) {
+      arr = arr.filter((x) =>
+        (x.title || '').toLowerCase().includes(q) ||
+        (x.slug || '').toLowerCase().includes(q)
+      );
+    }
+
+    if (sortMode === 'title') {
+      arr.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    } else {
+      // recent first
+      arr.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    }
+    return arr;
+  };
+
+  const render = () => {
+    const arr = applyFilterSort(livesData);
+
+    if (!arr.length) {
+      if (listEl) listEl.innerHTML = '';
+      if (emptyEl) emptyEl.style.display = 'block';
+      if (hintEl) hintEl.textContent = 'Browse streams or start your own.';
+      // If lives.html provided a hook, inform it
+      window.livenixSetVisibility?.(false);
+      return;
+    }
+
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (hintEl) hintEl.textContent = 'Browse streams or start your own.';
+    if (listEl) listEl.innerHTML = arr.map(liveTile).join('');
+    window.livenixSetVisibility?.(true);
+  };
+
+  // -------- API calls --------
   async function loadLives() {
-    listEl.innerHTML = '';
-    emptyEl.style.display = 'none';
     if (hintEl) hintEl.textContent = 'Loading…';
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (listEl) listEl.innerHTML = '';
 
     try {
       const r = await fetch('/api/lives', {
-        headers: { 'Authorization': token }
+        headers: { 'Authorization': AUTH }
       });
 
       if (r.status === 401) {
@@ -71,20 +120,17 @@
         return;
       }
 
-      const lives = await r.json();
-
-      if (!Array.isArray(lives) || lives.length === 0) {
-        emptyEl.style.display = 'block';
-        if (hintEl) hintEl.textContent = 'Browse streams or start your own.';
-        return;
-      }
-
-      listEl.innerHTML = lives.map(liveTile).join('');
-      if (hintEl) hintEl.textContent = 'Browse streams or start your own.';
+      const data = await r.json();
+      livesData = Array.isArray(data) ? data : [];
+      render();
     } catch (e) {
-      emptyEl.style.display = 'block';
-      emptyEl.textContent = 'Failed to load lives. Please try again.';
       console.error(e);
+      livesData = [];
+      render();
+      if (emptyEl) {
+        emptyEl.style.display = 'block';
+        emptyEl.textContent = 'Failed to load lives. Please try again.';
+      }
       if (hintEl) hintEl.textContent = 'Error loading.';
     }
   }
@@ -96,7 +142,7 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': token
+          'Authorization': AUTH
         },
         body: JSON.stringify({ title })
       });
@@ -118,7 +164,7 @@
     }
   }
 
-  // Copy helpers (global so onclick can access)
+  // -------- Copy helpers (global for onclick) --------
   window.copySlug = (slugEnc) => {
     const slug = decodeURIComponent(slugEnc);
     const url = `${location.origin}/viewer.html?slug=${slug}`;
@@ -128,11 +174,29 @@
     );
   };
 
-  // Wire buttons
+  // -------- Wire buttons --------
   document.getElementById('create').onclick = createLive;
   document.getElementById('refresh').onclick = loadLives;
   document.getElementById('linkGoLive').onclick = (e) => { e.preventDefault(); createLive(); };
 
-  // Initial load
+  // -------- Optional: search/sort hooks --------
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      filterText = searchInput.value || '';
+      render();
+    });
+  }
+  if (sortSelect) {
+    sortSelect.addEventListener('change', () => {
+      sortMode = sortSelect.value || 'recent';
+      render();
+    });
+  }
+
+  // Expose hooks (used by the inline script in lives.html; safe if unused)
+  window.livenixFilter = (text) => { filterText = text || ''; render(); };
+  window.livenixSort   = (mode) => { sortMode = mode || 'recent'; render(); };
+
+  // -------- Initial load --------
   loadLives();
 })();

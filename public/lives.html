@@ -2,43 +2,63 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Lives • KoHat Live</title>
+  <title>Live Now • Livenix</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#ffffff" />
   <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="/favicon.ico" />
 </head>
 <body>
   <!-- Header -->
   <header class="header">
-    <a href="/lives.html" class="brand">🎥 KoHat Live</a>
-    <div class="actions">
-      <button id="refresh" class="btn ghost">Refresh</button>
-      <button id="create" class="btn">Go Live</button>
-      <span id="userEmail" class="small" style="margin-left:8px;opacity:.85"></span>
-      <button id="signout" class="btn">Sign out</button>
+    <a href="/lives.html" class="brand" aria-label="Livenix home">
+      <!-- If you add /assets/livenix.svg later, it will show automatically -->
+      <img src="/assets/livenix.svg" alt="" style="height:20px;vertical-align:middle;margin-right:8px;display:inline-block" onerror="this.style.display='none'">
+      Livenix
+    </a>
+
+    <div class="actions" style="margin-left:auto; display:flex; align-items:center; gap:10px;">
+      <button id="refresh" class="btn ghost" aria-label="Refresh lives">Refresh</button>
+      <button id="create" class="btn" aria-label="Start a live">Go Live</button>
+      <span id="userEmail" class="small" style="margin-left:6px; opacity:.85"></span>
+      <button id="signout" class="btn" aria-label="Sign out">Sign out</button>
     </div>
   </header>
 
   <!-- Main -->
   <main class="main">
-    <section style="max-width: 1000px; margin: 0 auto; width:100%;">
-      <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap">
-        <h1 style="margin:0; font-size:1.6rem">Live now</h1>
-        <span class="small" id="hint" style="opacity:.9">Browse streams or start your own.</span>
-        <span class="right"></span>
+    <section class="card" style="max-width:1100px; margin:0 auto; padding:16px;">
+      <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:14px;">
+        <h1 style="margin:0; font-size:1.6rem; line-height:1">Live now</h1>
+        <span id="hint" class="small" style="opacity:.9">Browse streams or start your own.</span>
+
+        <!-- Optional search/filter (hook up later if you like) -->
+        <div style="margin-left:auto; display:flex; gap:8px;">
+          <input id="search" type="search" placeholder="Search lives…" aria-label="Search lives"
+                 style="border:1px solid var(--border); padding:8px 10px; border-radius:10px; min-width:220px; background:var(--bg-soft)">
+          <select id="sort" aria-label="Sort lives"
+                  style="border:1px solid var(--border); padding:8px 10px; border-radius:10px; background:var(--bg-soft)">
+            <option value="recent">Most recent</option>
+            <option value="title">Title A–Z</option>
+          </select>
+        </div>
       </div>
 
+      <!-- Live cards grid -->
       <div id="list" class="grid cards"></div>
 
-      <div id="empty" class="empty" style="display:none">
-        No live streams right now. Be the first to
-        <a class="btn link" href="#" id="linkGoLive">go live</a>.
+      <!-- Empty state -->
+      <div id="empty" class="empty" style="display:none; text-align:center; padding:28px 12px;">
+        <p style="margin:0 0 12px; font-size:1rem; color:var(--text-soft)">No live streams right now.</p>
+        <a class="btn" href="#" id="linkGoLive">Go live</a>
       </div>
     </section>
   </main>
 
+  <!-- Footer -->
   <footer class="footer">
-    <small>© 2025 KoHat Live</small>
-    <nav>
+    <small>© 2025 Livenix</small>
+    <nav style="display:flex; gap:14px;">
       <a href="#">Terms</a>
       <a href="#">Privacy</a>
       <a href="#">Contact</a>
@@ -47,5 +67,23 @@
 
   <!-- Live List logic -->
   <script type="module" src="/lives.js"></script>
+  <script>
+    // Optional: simple client-side filter/sort hooks (non-breaking if not used in lives.js)
+    (function () {
+      const list = document.getElementById('list');
+      const empty = document.getElementById('empty');
+      const search = document.getElementById('search');
+      const sort = document.getElementById('sort');
+
+      // If your lives.js exposes a global to re-render/filter, you can wire it here.
+      // These are placeholders and won't break anything if lives.js doesn't use them.
+      if (search) search.addEventListener('input', () => window.livenixFilter?.(search.value.trim()));
+      if (sort) sort.addEventListener('change', () => window.livenixSort?.(sort.value));
+      window.livenixSetVisibility = (hasItems) => {
+        if (!list || !empty) return;
+        empty.style.display = hasItems ? 'none' : 'block';
+      };
+    })();
+  </script>
 </body>
 </html>

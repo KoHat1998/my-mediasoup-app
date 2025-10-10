@@ -2,36 +2,44 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Broadcast • KoHat Live</title>
+  <title>Broadcast • Livenix</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#ffffff" />
   <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="/favicon.ico" />
 </head>
 <body>
   <!-- Header -->
   <header class="header">
-    <a href="/lives.html" class="brand">🎥 KoHat Live</a>
-    <div class="actions">
-      <button id="endBtn" class="btn ghost">End Stream</button>
-      <button id="signout" class="btn">Sign out</button>
+    <a href="/lives.html" class="brand" aria-label="Go to lives">
+      <img src="/assets/livenix.svg" alt="" style="height:20px;margin-right:8px;vertical-align:middle;display:inline-block" onerror="this.style.display='none'">
+      Livenix
+    </a>
+    <div class="actions" style="margin-left:auto; display:flex; align-items:center; gap:10px;">
+      <button id="endBtn" class="btn ghost danger" aria-label="End stream">End Stream</button>
+      <button id="signout" class="btn" aria-label="Sign out">Sign out</button>
     </div>
   </header>
 
   <!-- Main -->
   <main class="main">
-    <section class="card" style="max-width:960px;margin:0 auto">
-      <h2 style="margin-top:0">Broadcast Console</h2>
+    <section class="card" style="max-width:960px;margin:0 auto;padding:16px;">
+      <h2 style="margin-top:0;font-size:1.4rem;">Broadcast Console</h2>
 
-      <div class="badges">
+      <!-- Live status -->
+      <div class="badges" style="margin:12px 0; display:flex; gap:8px; flex-wrap:wrap;">
         <span id="liveBadge" class="badge">OFFLINE</span>
         <span id="uptime" class="badge">00:00:00</span>
         <span id="viewers" class="badge">👀 0</span>
       </div>
 
+      <!-- Preview -->
       <div id="skel" class="skel" style="margin:12px 0; display:none;"></div>
-      <video id="preview" class="video" autoplay muted playsinline style="display:block"></video>
+      <video id="preview" class="video" autoplay muted playsinline style="display:block; width:100%; border-radius:12px; background:#000;"></video>
 
-      <div class="toolbar" style="margin-top:12px;flex-wrap:wrap">
-        <button id="btnStart" class="btn">Go Live (Camera)</button>
+      <!-- Toolbar -->
+      <div class="toolbar" style="margin-top:16px;flex-wrap:wrap; display:flex; gap:10px;">
+        <button id="btnStart" class="btn primary">Go Live (Camera)</button>
         <button id="btnScreen" class="btn">Share Screen</button>
         <button id="btnCam" class="btn ghost">Disable Cam</button>
         <button id="btnMic" class="btn ghost">Mute Mic</button>
@@ -41,7 +49,7 @@
         <span class="right small" id="status">Idle</span>
       </div>
 
-      <p class="small" style="margin-top:10px;opacity:.8;text-align:center">
+      <p class="small" style="margin-top:12px;opacity:.8;text-align:center">
         Logged in as <span id="who"></span>
       </p>
     </section>
@@ -49,8 +57,8 @@
 
   <!-- Footer -->
   <footer class="footer">
-    <small>© 2025 KoHat Live</small>
-    <nav>
+    <small>© 2025 Livenix</small>
+    <nav style="display:flex; gap:14px;">
       <a href="#">Terms</a>
       <a href="#">Privacy</a>
       <a href="#">Contact</a>

@@ -2,38 +2,47 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Watch • KoHat Live</title>
+  <title>Watch • Livenix</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#ffffff" />
   <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="/favicon.ico" />
 </head>
 <body>
   <!-- Header -->
   <header class="header">
-    <a href="/lives.html" class="brand">🎥 KoHat Live</a>
-    <div class="actions">
-      <button id="browse" class="btn ghost">Browse Lives</button>
-      <button id="signout" class="btn">Sign out</button>
+    <a href="/lives.html" class="brand" aria-label="Livenix home">
+      <img src="/assets/livenix.svg" alt="" style="height:20px;vertical-align:middle;margin-right:8px;display:inline-block" onerror="this.style.display='none'">
+      Livenix
+    </a>
+    <div class="actions" style="margin-left:auto; display:flex; align-items:center; gap:10px;">
+      <button id="browse" class="btn ghost" aria-label="Browse lives">Browse Lives</button>
+      <button id="signout" class="btn" aria-label="Sign out">Sign out</button>
     </div>
   </header>
 
   <!-- Auth guard: viewers must be signed in -->
   <script>
     (function requireAuth(){
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('token') || localStorage.getItem('authToken');
       if (!token) location.href = '/signin.html';
     })();
   </script>
 
+  <!-- Main -->
   <main class="main">
-    <section class="card">
-      <h2 style="margin-top:0">Viewer</h2>
+    <section class="card" style="max-width:1100px; margin:0 auto; padding:16px;">
+      <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;">
+        <h2 style="margin:0; font-size:1.4rem;">Viewer</h2>
+        <p id="status" class="small" style="margin:0; opacity:.85;"></p>
+      </div>
 
-      <!-- player wrapper -->
-      <div class="player" id="player">
+      <!-- Player wrapper -->
+      <div class="player" id="player" style="margin-top:12px;">
         <!-- top-left badges -->
-        <div class="overlay top-left">
+        <div class="overlay top-left" style="display:flex; gap:8px;">
           <span id="live" class="badge">Checking…</span>
-          <span id="vc" class="badge">👀 0</span>
+          <span id="vc" class="badge" aria-live="polite">👀 0</span>
         </div>
 
         <video
@@ -44,13 +53,14 @@
           controlslist="nodownload noplaybackrate noremoteplayback"
           disablepictureinpicture
           disableremoteplayback
+          style="width:100%; background:#000; border-radius:12px;"
         ></video>
       </div>
 
-      <!-- outside toolbar (quality) -->
-      <div class="toolbar">
-        <label for="qualitySel">Quality</label>
-        <select id="qualitySel">
+      <!-- Toolbar (quality) -->
+      <div class="toolbar" style="margin-top:12px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <label for="qualitySel" class="small" style="opacity:.9;">Quality</label>
+        <select id="qualitySel" class="btn" style="background:var(--bg-soft); color:inherit; border:1px solid var(--border);">
           <option value="auto">Auto</option>
           <option value="high">High</option>
           <option value="med">Medium</option>
@@ -60,19 +70,18 @@
 
       <div id="skel" class="skel" style="margin:12px auto 0;"></div>
 
-      <!-- small readouts under the player -->
-      <div class="badges" style="justify-content:center">
+      <!-- Readouts under the player -->
+      <div class="badges" style="justify-content:center; margin-top:8px;">
         <span id="res" class="badge">–</span>
         <span id="quality" class="badge">–</span>
       </div>
-
-      <p id="status" style="margin-top:8px; opacity:.85; text-align:center"></p>
     </section>
   </main>
 
+  <!-- Footer -->
   <footer class="footer">
-    <small>© 2025 KoHat Live</small>
-    <nav>
+    <small>© 2025 Livenix</small>
+    <nav style="display:flex; gap:14px;">
       <a href="#">Terms</a>
       <a href="#">Privacy</a>
       <a href="#">Contact</a>
@@ -81,6 +90,7 @@
 
   <div id="toast" class="toast"></div>
 
+  <!-- Scripts -->
   <script src="/socket.io/socket.io.js"></script>
   <script type="module">
     // Header actions

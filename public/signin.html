@@ -2,50 +2,57 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Sign in · KoHat Live</title>
+  <title>Sign in · Livenix</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#ffffff" />
   <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="/favicon.ico" />
 </head>
 <body>
   <!-- Header -->
   <header class="header">
-    <a href="/" class="brand">🎥 KoHat Live</a>
+    <a href="/" class="brand" aria-label="Livenix home">
+      <img src="/assets/livenix.svg" alt="" style="height:22px;vertical-align:middle;margin-right:6px" onerror="this.style.display='none'">
+      Livenix
+    </a>
     <div class="actions">
       <a class="btn ghost" href="/signup.html">Create account</a>
     </div>
   </header>
 
   <!-- Main -->
-  <main class="main" style="max-width:620px;margin:0 auto">
-    <section class="card" style="padding:24px">
-      <h1 style="margin:0 0 6px">Welcome back</h1>
-      <p class="small" style="opacity:.9;margin:0 0 16px">
-        Sign in to watch and host live streams.
+  <main class="main" style="max-width:500px;margin:0 auto;">
+    <section class="card" style="padding:28px; border-radius:12px;">
+      <h1 style="margin:0 0 10px; font-size:1.6rem;">Welcome back</h1>
+      <p class="small" style="opacity:.8; margin:0 0 20px;">
+        Sign in to watch and host live streams on <strong>Livenix</strong>.
       </p>
 
       <form id="f" autocomplete="on">
         <label class="label">Email</label>
         <input class="input" type="email" name="email" id="email" placeholder="you@example.com" required />
 
-        <label class="label" style="margin-top:12px">Password</label>
-        <input class="input" type="password" name="password" id="password" required />
+        <label class="label" style="margin-top:14px;">Password</label>
+        <input class="input" type="password" name="password" id="password" placeholder="••••••••" required />
 
-        <div style="display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap">
-          <button id="submitBtn" class="btn" type="submit">Sign in</button>
+        <div style="display:flex; gap:12px; align-items:center; margin-top:20px; flex-wrap:wrap;">
+          <button id="submitBtn" class="btn" type="submit" style="flex:1;">Sign in</button>
           <span id="msg" class="small" style="opacity:.9"></span>
         </div>
       </form>
 
-      <div style="margin-top:20px;text-align:center">
-        <button id="guestBtn" class="btn ghost" type="button">Continue as Guest (test)</button>
+      <div style="margin-top:24px; text-align:center;">
+        <button id="guestBtn" class="btn ghost" type="button" style="width:100%;">
+          Continue as Guest (test)
+        </button>
       </div>
     </section>
   </main>
 
   <!-- Footer -->
   <footer class="footer">
-    <small>© 2025 KoHat Live</small>
-    <nav>
+    <small>© 2025 Livenix</small>
+    <nav style="display:flex; gap:14px;">
       <a href="#">Terms</a>
       <a href="#">Privacy</a>
       <a href="#">Contact</a>
@@ -93,15 +100,13 @@
           return;
         }
 
-        // Normalize token (Laravel usually returns { access_token, token_type, user })
         const access = data.access_token || data.token || '';
         const type   = (data.token_type || 'Bearer').trim();
         const bearer = access ? `${type} ${access}` : '';
 
-        // Save token for authenticated pages
         if (bearer) {
           localStorage.setItem('token', bearer);
-          localStorage.setItem('authToken', bearer); // for compatibility
+          localStorage.setItem('authToken', bearer);
         }
         if (data.user) {
           localStorage.setItem('user', JSON.stringify(data.user));
@@ -109,11 +114,8 @@
 
         msg.textContent = '✅ Login successful! Redirecting…';
         msg.style.color = 'green';
-
-        // Redirect user immediately
         location.replace('/lives.html');
 
-        // Backup redirect in case browser blocks replace
         setTimeout(() => {
           if (!/lives\.html$/.test(location.pathname)) {
             location.href = '/lives.html';
@@ -128,7 +130,6 @@
       }
     };
 
-    // Guest login for local testing (no real backend)
     guestBtn.onclick = () => {
       const fake = 'Bearer TEST_FAKE_TOKEN';
       localStorage.setItem('token', fake);

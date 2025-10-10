@@ -2,43 +2,48 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Sign up · KoHat Live</title>
+  <title>Sign up · Livenix</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#ffffff" />
   <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="/favicon.ico" />
 </head>
 <body>
   <!-- Header -->
   <header class="header">
-    <a href="/" class="brand">🎥 KoHat Live</a>
+    <a href="/" class="brand" aria-label="Livenix home">
+      <img src="/assets/livenix.svg" alt="" style="height:22px;vertical-align:middle;margin-right:6px" onerror="this.style.display='none'">
+      Livenix
+    </a>
     <div class="actions">
       <a class="btn ghost" href="/signin.html">Already have an account?</a>
     </div>
   </header>
 
   <!-- Main -->
-  <main class="main" style="max-width:620px;margin:0 auto">
-    <section class="card" style="padding:24px">
-      <h1 style="margin:0 0 6px">Create your account</h1>
-      <p class="small" style="opacity:.9;margin:0 0 16px">
-        Sign up to watch lives and start streaming.
+  <main class="main" style="max-width:500px;margin:0 auto;">
+    <section class="card" style="padding:28px; border-radius:12px;">
+      <h1 style="margin:0 0 10px; font-size:1.6rem;">Create your account</h1>
+      <p class="small" style="opacity:.8; margin:0 0 20px;">
+        Sign up to watch lives and start streaming on <strong>Livenix</strong>.
       </p>
 
       <form id="signupForm" autocomplete="on">
-        <label class="label">Name (optional)</label>
-        <input class="input" type="text" name="name" placeholder="Your display name" />
+        <label class="label" for="name">Name (optional)</label>
+        <input class="input" type="text" name="name" id="name" placeholder="Your display name" />
 
-        <label class="label" style="margin-top:12px">Email</label>
-        <input class="input" type="email" name="email" placeholder="you@example.com" required />
+        <label class="label" for="email" style="margin-top:14px;">Email</label>
+        <input class="input" type="email" name="email" id="email" placeholder="you@example.com" required />
 
-        <label class="label" style="margin-top:12px">Password</label>
-        <input class="input" type="password" name="password" minlength="6" required />
+        <label class="label" for="password" style="margin-top:14px;">Password</label>
+        <input class="input" type="password" name="password" id="password" minlength="6" placeholder="••••••••" required />
 
-        <label class="label" style="margin-top:12px">Confirm Password</label>
-        <input class="input" type="password" name="confirm_password" minlength="6" required />
+        <label class="label" for="confirm_password" style="margin-top:14px;">Confirm Password</label>
+        <input class="input" type="password" name="confirm_password" id="confirm_password" minlength="6" placeholder="••••••••" required />
 
-        <div style="display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap">
-          <button id="submitBtn" class="btn" type="submit">Create account</button>
-          <span id="msg" class="small" style="opacity:.9"></span>
+        <div style="display:flex; gap:12px; align-items:center; margin-top:20px; flex-wrap:wrap;">
+          <button id="submitBtn" class="btn" type="submit" style="flex:1;">Create account</button>
+          <span id="msg" class="small" style="opacity:.9;"></span>
         </div>
       </form>
     </section>
@@ -46,8 +51,8 @@
 
   <!-- Footer -->
   <footer class="footer">
-    <small>© 2025 KoHat Live</small>
-    <nav>
+    <small>© 2025 Livenix</small>
+    <nav style="display:flex; gap:14px;">
       <a href="#">Terms</a>
       <a href="#">Privacy</a>
       <a href="#">Contact</a>
@@ -98,7 +103,6 @@
         try { data = await res.json(); } catch {}
 
         if (!res.ok) {
-          // Laravel may send detailed validation errors
           const firstError =
             data.message ||
             (data.errors && Object.values(data.errors)[0]?.[0]) ||
