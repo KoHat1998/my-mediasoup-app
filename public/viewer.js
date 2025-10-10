@@ -4,15 +4,57 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 (() => {
   'use strict';
 
+  // ---- SAFETY SHIMS (Android WebView compat) ----
+  (function () {
+    function ensureCaps(v) {
+      if (!v || typeof v !== 'object') return { codecs: [], headerExtensions: [] };
+      if (!Array.isArray(v.codecs)) v.codecs = [];
+      if (!Array.isArray(v.headerExtensions)) v.headerExtensions = [];
+      return v;
+    }
+    if (window.RTCRtpReceiver && typeof RTCRtpReceiver.getCapabilities === 'function') {
+      const orig = RTCRtpReceiver.getCapabilities.bind(RTCRtpReceiver);
+      RTCRtpReceiver.getCapabilities = (kind) => {
+        try { return ensureCaps(orig(kind)); } catch (_) { return ensureCaps(null); }
+      };
+    }
+    if (window.RTCRtpSender && typeof RTCRtpSender.getCapabilities === 'function') {
+      const orig = RTCRtpSender.getCapabilities.bind(RTCRtpSender);
+      RTCRtpSender.getCapabilities = (kind) => {
+        try { return ensureCaps(orig(kind)); } catch (_) { return ensureCaps(null); }
+      };
+    }
+    if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
+      const orig = MediaSource.isTypeSupported.bind(MediaSource);
+      MediaSource.isTypeSupported = (type) => {
+        try { return orig(type); } catch (_) { return false; }
+      };
+    }
+  })();
+
+  // ---- Helpers / UI ----
   const $ = (id) => document.getElementById(id);
-  const toast = (msg, t=1500) => { const el = $('toast'); if (!el) return; el.textContent = msg; el.style.display = 'block'; setTimeout(() => (el.style.display = 'none'), t); };
+  const toast = (msg, t = 1500) => {
+    const el = $('toast'); if (!el) return;
+    el.textContent = msg; el.style.display = 'block';
+    setTimeout(() => (el.style.display = 'none'), t);
+  };
 
   $('browse').onclick = () => location.href = '/lives.html';
   $('signout').onclick = () => { localStorage.clear(); location.replace('/signin.html'); };
 
-  const rawToken = localStorage.getItem('token') || localStorage.getItem('authToken') || '';
-  if (!rawToken) { location.replace('/signin.html'); return; }
-  const token = /^Bearer\s/i.test(rawToken) ? rawToken : `Bearer ${rawToken}`;
+  // Accept token from localStorage or ?token= and tolerate "Bearer "
+  function getAuthToken() {
+    const qs = new URLSearchParams(location.search);
+    const fromQS = qs.get('token') || qs.get('authToken') || '';
+    const fromLS = localStorage.getItem('token') || localStorage.getItem('authToken') || '';
+    const raw = (fromLS || fromQS || '').trim();
+    return raw.replace(/^Bearer\s+/i, ''); // mediasoup/Socket.IO want raw
+  }
+
+  const tokenRaw = getAuthToken();
+  if (!tokenRaw) { location.replace('/signin.html'); return; }
+  const tokenBearer = `Bearer ${tokenRaw}`; // keep Bearer form if your server expects it
 
   const statusEl = $('status');
   const badgeLive = $('live');
@@ -23,6 +65,15 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
   const remote = $('remote');
   const qualitySel = $('qualitySel');
 
+  // Make autoplay reliable in mobile/WebView
+  try {
+    remote.muted = true;
+    remote.playsInline = true;
+    remote.setAttribute('playsinline', '');
+    remote.setAttribute('webkit-playsinline', '');
+    remote.autoplay = true;
+  } catch (_) {}
+
   const slug = new URLSearchParams(location.search).get('slug');
   if (!slug) {
     statusEl.textContent = '❌ Missing live slug. Please open from the Live List.';
@@ -31,11 +82,12 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
     return;
   }
 
-  // Use same-origin Socket.IO client; pass Bearer token
+  // Use same-origin Socket.IO client; pass token (raw) in auth
+  // Ensure your HTML includes: <script src="/socket.io/socket.io.js"></script>
   const socket = io({
     path: '/socket.io',
     transports: ['websocket', 'polling'],
-    auth: { role: 'viewer', token, slug },
+    auth: { role: 'viewer', token: tokenRaw, slug },
     withCredentials: true
   });
 
@@ -98,6 +150,8 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
       const track = c.track;
       const stream = new MediaStream([track]);
       remote.srcObject = stream;
+      // Play immediately if policy blocks it initially
+      remote.play?.().catch(() => {});
       track.onended = () => {
         badgeLive.textContent = 'OFFLINE';
         badgeLive.className = 'badge';
@@ -107,6 +161,7 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
       statusEl.textContent = '🎥 Video playing';
       updateResolutionBadge(c).catch(()=>{});
     } catch (err) {
+      console.warn('video consume failed', err);
       skel.style.display = 'none';
       badgeLive.textContent = 'OFFLINE';
       badgeLive.className = 'badge';
@@ -122,6 +177,8 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
       const s = remote.srcObject || new MediaStream();
       s.addTrack(track);
       remote.srcObject = s;
+      // Unmute video to hear audio once playing
+      setTimeout(() => { try { remote.muted = false; } catch(_){} }, 300);
     } catch (err) {
       console.warn('audio consume failed', err);
     }
@@ -129,7 +186,10 @@ import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
   qualitySel.onchange = () => {
     const v = qualitySel.value;
-    const pref = v === 'high' ? { spatialLayer: 2 } : v === 'med' ? { spatialLayer: 1 } : v === 'low' ? { spatialLayer: 0 } : { spatialLayer: 2 };
+    const pref = v === 'high' ? { spatialLayer: 2 }
+               : v === 'med'  ? { spatialLayer: 1 }
+               : v === 'low'  ? { spatialLayer: 0 }
+               : { spatialLayer: 2 };
     socket.emit('setPreferredLayers', pref, () => { badgeQ.textContent = `Quality: ${v}`; });
   };
 
