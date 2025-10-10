@@ -285,7 +285,16 @@ app.patch('/api/lives/:id/end', requireAuthHeader, async (req, res) => {
 // ---------------- Static Routes ----------------
 app.get('/healthz', (_req, res) => res.json({ ok: true }));
 app.get('/', (_req, res) => res.redirect('/lives.html'));
-app.use(express.static('public')); // serves /signin.html, /signup.html, etc.
+app.use((req, res, next) => {
+  if (req.path.endsWith('.html')) {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.set('Surrogate-Control', 'no-store');
+  }
+  next();
+});
+app.use(express.static('public', { etag: false, lastModified: false, maxAge: 0 }));
 
 /* -------- Inline viewer: /player_only.html (also /viewer, /viewer.html) -------- */
 const PLAYER_HTML = `<!doctype html>
@@ -615,7 +624,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// ---------------- Error handler ----------------
+// ---------------- Error handler ----------------  
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error' });

@@ -21,202 +21,229 @@
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
+
+  <!-- Everything below is in one async IIFE so module import errors never break the page -->
   <script type="module">
-    import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
+    (async () => {
+      const statusEl = document.getElementById('status');
+      const videoEl  = document.getElementById('remoteVideo');
 
-    const statusEl = document.getElementById('status');
-    const videoEl  = document.getElementById('remoteVideo');
-
-    // -------- helpers ----------
-    function setStatus(msg, type='info') {
-      statusEl.textContent = msg;
-      statusEl.style.backgroundColor =
-        type === 'live'  ? '#b00020' :
-        type === 'error' ? '#6a1b1a' : 'rgba(0,0,0,.7)';
-      if (window.flutter_inappwebview?.callHandler) {
-        window.flutter_inappwebview.callHandler('playerStatus', { message: msg, type });
-      }
-      console.log('[PLAYER]', msg);
-    }
-    const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
-
-    // -------- mediasoup state ----------
-    let socket;
-    let device;
-    let recvTransport;
-    let videoConsumer, audioConsumer;
-    const mediaStream = new MediaStream();
-    videoEl.srcObject = mediaStream;
-
-    function attachTrack(kind, track){
-      const old = kind==='video' ? mediaStream.getVideoTracks()[0] : mediaStream.getAudioTracks()[0];
-      if (old) mediaStream.removeTrack(old);
-      if (track) mediaStream.addTrack(track);
-    }
-
-    async function loadDevice() {
-      const caps = await emitAck('getRtpCapabilities', null);
-      device = new mediasoupClient.Device();
-      await device.load({ routerRtpCapabilities: caps });
-    }
-
-    async function createRecvTransport() {
-      const params = await emitAck('createRecvTransport', null);
-      if (params?.error) throw new Error(params.error);
-      const t = device.createRecvTransport(params);
-      t.on('connect', ({ dtlsParameters }, cb, eb) => {
-        emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(eb);
-      });
-      return t;
-    }
-
-    async function consumeKind(kind) {
-      const data = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
-      if (data?.error) {
-        console.log(`No ${kind} yet:`, data.error);
-        return null;
-      }
-      const c = await recvTransport.consume(data);
-      if (kind === 'video') attachTrack('video', c.track);
-      else attachTrack('audio', c.track);
-      await emitAck('resume', { consumerId: c.id });
-      return c;
-    }
-
-    // -------- socket emit with ack ----------
-    function emitAck(event, payload){
-      return new Promise((resolve, reject) => {
-        socket.timeout(10000).emit(event, payload, (res) => {
-          if (res && res.error) return reject(new Error(res.error));
-          resolve(res);
-        });
-      });
-    }
-
-    // -------- public bridge (Flutter can still call these) ----------
-    window.playerBridge = {
-      /**
-       * options: { host, token?, role='viewer', channelId?, slug?, liveId? }
-       * We send {role, token, slug, liveId} in the Socket.IO handshake.
-       */
-      async init(options) {
-        try {
-          const host = options?.host || location.origin;
-          const channel = options?.channelId || options?.slug || options?.liveId || options?.id || options?.room || options?.ch;
-          if (!channel) throw new Error('channelId/slug/liveId required');
-
-          const rawToken = options?.token
-            || new URL(location.href).searchParams.get('token')
-            || '';
-
-          const slug   = channel;
-          const liveId = channel;
-
-          setStatus('Connecting…');
-          socket = io(host, {
-            transports: ['websocket','polling'],
-            auth: {
-              role: options?.role || 'viewer',
-              token: rawToken, // raw "eyJ…" or "Bearer eyJ…"; server normalizes
-              slug,
-              liveId
-            }
-          });
-
-          await new Promise((resolve, reject) => {
-            if (socket.connected) return resolve();
-            const ok = () => { cleanup(); resolve(); };
-            const bad = (e) => { cleanup(); reject(e); };
-            const cleanup = () => { socket.off('connect', ok); socket.off('connect_error', bad); };
-            socket.once('connect', ok);
-            socket.once('connect_error', bad);
-          });
-
-          socket.on('connect', () => setStatus('Connected. Preparing device…'));
-          socket.on('connect_error', (err) => setStatus(`Socket error: ${err.message}`, 'error'));
-          socket.on('disconnect', (r) => setStatus(`Disconnected: ${r}`));
-
-          // mediasoup pipeline
-          await loadDevice();
-          recvTransport = await createRecvTransport();
-          videoConsumer = await consumeKind('video');
-          audioConsumer = await consumeKind('audio');
-
-          if (videoConsumer || audioConsumer) {
-            setStatus(videoConsumer ? 'LIVE' : 'Audio only', 'live');
-          } else {
-            setStatus('Waiting for broadcaster…');
-          }
-
-          socket.on('newProducer', async ({ kind }) => {
-            try {
-              if (!device || !device.loaded || !recvTransport) return;
-              const c = await consumeKind(kind);
-              if (kind === 'video') { videoConsumer?.close(); videoConsumer = c; }
-              else                  { audioConsumer?.close(); audioConsumer = c; }
-              setStatus('LIVE', 'live');
-            } catch (e) { console.warn('reconsume failed', e); }
-          });
-
-          // Report dimensions to Flutter (optional)
-          await sleep(500);
-          if (window.flutter_inappwebview?.callHandler) {
-            window.flutter_inappwebview.callHandler('videoResolutionChanged', {
-              width:  videoEl.videoWidth  || 0,
-              height: videoEl.videoHeight || 0
-            });
-          }
-
-          return { ok: true };
-        } catch (e) {
-          console.error(e);
-          setStatus(e.message || 'init failed', 'error');
-          return { ok: false, error: String(e) };
+      const log = (...a) => console.log('[PLAYER]', ...a);
+      function setStatus(msg, type='info') {
+        statusEl.textContent = msg;
+        statusEl.style.backgroundColor =
+          type === 'live'  ? '#b00020' :
+          type === 'error' ? '#6a1b1a' : 'rgba(0,0,0,.7)';
+        if (window.flutter_inappwebview?.callHandler) {
+          window.flutter_inappwebview.callHandler('playerStatus', { message: msg, type });
         }
-      },
-      async enterFullscreen() {
-        if (videoEl.requestFullscreen) await videoEl.requestFullscreen().catch(()=>{});
-        return { ok: true };
-      },
-      async exitFullscreen() {
-        if (document.fullscreenElement) await document.exitFullscreen().catch(()=>{});
-        return { ok: true };
+        log(msg);
       }
-    };
+      const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
-    // -------- AUTO-START (fixes “Waiting for init…”) ----------
-    (async function autoStart() {
+      // ---- Load mediasoup-client safely (dynamic import so parse never fails) ----
+      let mediasoupClient;
       try {
-        const qs = new URLSearchParams(location.search);
-        const ident = qs.get('slug') || qs.get('liveId') || qs.get('id') || qs.get('room') || qs.get('ch') || '';
-        if (!ident) {
-          setStatus('Missing id/slug', 'error');
-          return;
-        }
-        // If token is present in the URL, pass it. Otherwise playerBridge.init will still try with empty token.
-        const token = qs.get('token') || '';
-        // Use the same host the page was loaded from.
-        const host = location.origin;
-
-        // Small delay to ensure the module is fully set up on some devices
-        await sleep(100);
-        await window.playerBridge.init({ host, role: 'viewer', token, slug: ident, liveId: ident });
+        setStatus('Loading viewer…');
+        mediasoupClient = await import('https://esm.sh/mediasoup-client@3');
+        // Some CDNs return { default: Module }, normalize:
+        mediasoupClient = mediasoupClient?.default ?? mediasoupClient;
       } catch (e) {
-        console.error('autoStart error', e);
-        setStatus('Auto-start failed', 'error');
+        console.error('mediasoup-client import failed:', e);
+        setStatus('Failed to load viewer lib', 'error');
+        return; // cannot continue without the lib
       }
-    })();
 
-    // report resize to Flutter (optional)
-    const notifySize = () => {
-      if (window.flutter_inappwebview?.callHandler) {
-        window.flutter_inappwebview.callHandler('videoResolutionChanged', {
-          width: videoEl.videoWidth, height: videoEl.videoHeight
+      // ---- mediasoup state ----
+      let socket;
+      let device;
+      let recvTransport;
+      let videoConsumer = null, audioConsumer = null;
+
+      const mediaStream = new MediaStream();
+      videoEl.srcObject = mediaStream;
+
+      function attachTrack(kind, track){
+        const old = kind==='video' ? mediaStream.getVideoTracks()[0] : mediaStream.getAudioTracks()[0];
+        if (old) mediaStream.removeTrack(old);
+        if (track) mediaStream.addTrack(track);
+      }
+
+      async function emitAck(event, payload){
+        return new Promise((resolve, reject) => {
+          socket.timeout(10000).emit(event, payload, (res) => {
+            if (res && res.error) return reject(new Error(res.error));
+            resolve(res);
+          });
         });
       }
-    };
-    videoEl.onloadedmetadata = notifySize;
-    videoEl.onresize = notifySize;
+
+      async function loadDevice() {
+        const caps = await emitAck('getRtpCapabilities', null);
+        device = new mediasoupClient.Device();
+        await device.load({ routerRtpCapabilities: caps });
+      }
+
+      async function createRecvTransport() {
+        const params = await emitAck('createRecvTransport', null);
+        if (params?.error) throw new Error(params.error);
+        const t = device.createRecvTransport(params);
+        t.on('connect', ({ dtlsParameters }, cb, eb) => {
+          emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(eb);
+        });
+        return t;
+      }
+
+      async function consumeKind(kind) {
+        const data = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
+        if (data?.error) {
+          log(`No ${kind} yet:`, data.error);
+          return null;
+        }
+        const c = await recvTransport.consume(data);
+        if (kind === 'video') attachTrack('video', c.track);
+        else attachTrack('audio', c.track);
+        await emitAck('resume', { consumerId: c.id });
+        return c;
+      }
+
+      // ---- Bridge exposed to Flutter (still supported) ----
+      window.playerBridge = {
+        /**
+         * options: { host, token?, role='viewer', channelId?, slug?, liveId?, id?, room?, ch? }
+         * We pass {role, token, slug, liveId} to Socket.IO auth (server normalizes token).
+         */
+        async init(options) {
+          try {
+            const host = options?.host || location.origin;
+            const channel =
+              options?.channelId || options?.slug || options?.liveId ||
+              options?.id || options?.room || options?.ch;
+            if (!channel) throw new Error('channelId/slug/liveId required');
+
+            const rawToken = options?.token
+              || new URL(location.href).searchParams.get('token')
+              || '';
+
+            const slug   = channel;
+            const liveId = channel;
+
+            setStatus('Connecting…');
+            socket = io(host, {
+              transports: ['websocket','polling'],
+              auth: {
+                role: options?.role || 'viewer',
+                token: rawToken, // raw "eyJ…" or "Bearer eyJ…" are both fine
+                slug,
+                liveId
+              }
+            });
+
+            // Wait for connection
+            await new Promise((resolve, reject) => {
+              if (socket.connected) return resolve();
+              const ok  = () => { cleanup(); resolve(); };
+              const bad = (e) => { cleanup(); reject(e); };
+              const cleanup = () => { socket.off('connect', ok); socket.off('connect_error', bad); };
+              socket.once('connect', ok);
+              socket.once('connect_error', bad);
+            });
+
+            socket.on('connect',       ()   => setStatus('Connected. Preparing device…'));
+            socket.on('disconnect',    (r)  => setStatus(`Disconnected: ${r}`));
+            socket.on('connect_error', (e)  => setStatus(`Socket error: ${e.message}`, 'error'));
+
+            // mediasoup pipeline
+            await loadDevice();
+            recvTransport = await createRecvTransport();
+
+            videoConsumer = await consumeKind('video');
+            audioConsumer = await consumeKind('audio');
+
+            if (videoConsumer || audioConsumer) {
+              setStatus(videoConsumer ? 'LIVE' : 'Audio only', 'live');
+            } else {
+              setStatus('Waiting for broadcaster…');
+            }
+
+            // React to new producers (e.g., broadcaster toggles camera/mic)
+            socket.on('newProducer', async ({ kind }) => {
+              try {
+                if (!device || !device.loaded || !recvTransport) return;
+                const c = await consumeKind(kind);
+                if (kind === 'video') { videoConsumer?.close(); videoConsumer = c; }
+                else                  { audioConsumer?.close(); audioConsumer = c; }
+                setStatus('LIVE', 'live');
+              } catch (e) { console.warn('newProducer consume failed:', e); }
+            });
+
+            // Report dimensions to Flutter (optional)
+            await sleep(500);
+            if (window.flutter_inappwebview?.callHandler) {
+              window.flutter_inappwebview.callHandler('videoResolutionChanged', {
+                width:  videoEl.videoWidth  || 0,
+                height: videoEl.videoHeight || 0
+              });
+            }
+
+            return { ok: true };
+          } catch (e) {
+            console.error(e);
+            setStatus(e.message || 'init failed', 'error');
+            return { ok: false, error: String(e) };
+          }
+        },
+
+        async enterFullscreen() {
+          if (videoEl.requestFullscreen) await videoEl.requestFullscreen().catch(()=>{});
+          return { ok: true };
+        },
+        async exitFullscreen() {
+          if (document.fullscreenElement) await document.exitFullscreen().catch(()=>{});
+          return { ok: true };
+        }
+      };
+
+      // ---- AUTO-START (so Flutter doesn’t need to call init) ----
+      (async function autoStart() {
+        try {
+          const qs = new URLSearchParams(location.search);
+          const ident =
+            qs.get('slug') || qs.get('liveId') || qs.get('id') ||
+            qs.get('room') || qs.get('ch') || '';
+          if (!ident) {
+            setStatus('Missing id/slug', 'error');
+            return;
+          }
+          const token = qs.get('token') || '';
+          const host  = location.origin;
+
+          // Small delay for some webviews to settle
+          await sleep(100);
+
+          const r = await window.playerBridge.init({
+            host, role: 'viewer', token, slug: ident, liveId: ident
+          });
+          if (!r || r.ok !== true) {
+            setStatus('Init returned error', 'error');
+          }
+        } catch (e) {
+          console.error('autoStart error', e);
+          setStatus('Auto-start failed', 'error');
+        }
+      })();
+
+      // Notify video size changes to Flutter (optional)
+      const notifySize = () => {
+        if (window.flutter_inappwebview?.callHandler) {
+          window.flutter_inappwebview.callHandler('videoResolutionChanged', {
+            width: videoEl.videoWidth, height: videoEl.videoHeight
+          });
+        }
+      };
+      videoEl.onloadedmetadata = notifySize;
+      videoEl.onresize = notifySize;
+    })();
   </script>
 </body>
 </html>
