@@ -43,6 +43,7 @@
 
 <!-- Strong Android WebView shim: ensure non-empty codecs for mediasoup-client -->
 <script>
+/* Strong WebView shim: guarantee non-empty RTP capabilities for mediasoup-client */
 (function () {
   function synthCaps(kind) {
     if (kind === 'audio') {
@@ -51,7 +52,8 @@
     return {
       codecs: [
         { mimeType: 'video/VP8',  clockRate: 90000 },
-        { mimeType: 'video/H264', clockRate: 90000, sdpFmtpLine: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f' }
+        { mimeType: 'video/H264', clockRate: 90000,
+          sdpFmtpLine: 'level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f' }
       ],
       headerExtensions: []
     };
@@ -62,20 +64,36 @@
     if (!Array.isArray(v.headerExtensions)) v.headerExtensions = [];
     return v;
   }
-  if (window.RTCRtpReceiver && typeof RTCRtpReceiver.getCapabilities === 'function') {
-    const orig = RTCRtpReceiver.getCapabilities.bind(RTCRtpReceiver);
-    RTCRtpReceiver.getCapabilities = (kind) => {
-      try { return ensureCaps(orig(kind), kind); } catch (_) { return synthCaps(kind); }
+
+  // Make sure the globals exist
+  if (!('RTCRtpReceiver' in window)) { window.RTCRtpReceiver = function(){}; }
+  if (!('RTCRtpSender'   in window)) { window.RTCRtpSender   = function(){}; }
+
+  // Patch/define static getCapabilities on both
+  (function patchReceiver(){
+    const orig = (window.RTCRtpReceiver && window.RTCRtpReceiver.getCapabilities) ? window.RTCRtpReceiver.getCapabilities.bind(window.RTCRtpReceiver) : null;
+    window.RTCRtpReceiver.getCapabilities = function (kind) {
+      try { return ensureCaps(orig ? orig(kind) : null, kind); }
+      catch (_) { return synthCaps(kind); }
     };
-  }
-  if (window.RTCRtpSender && typeof RTCRtpSender.getCapabilities === 'function') {
-    const orig = RTCRtpSender.getCapabilities.bind(RTCRtpSender);
-    RTCRtpSender.getCapabilities = (kind) => {
-      try { return ensureCaps(orig(kind), kind); } catch (_) { return synthCaps(kind); }
+  })();
+
+  (function patchSender(){
+    const orig = (window.RTCRtpSender && window.RTCRtpSender.getCapabilities) ? window.RTCRtpSender.getCapabilities.bind(window.RTCRtpSender) : null;
+    window.RTCRtpSender.getCapabilities = function (kind) {
+      try { return ensureCaps(orig ? orig(kind) : null, kind); }
+      catch (_) { return synthCaps(kind); }
     };
+  })();
+
+  // Defensive: some code paths check MediaSource; keep this safe too
+  if (window.MediaSource && typeof MediaSource.isTypeSupported === 'function') {
+    const orig = MediaSource.isTypeSupported.bind(MediaSource);
+    MediaSource.isTypeSupported = (type) => { try { return orig(type); } catch (_) { return false; } };
   }
 })();
 </script>
+
 
 <!-- Viewer logic -->
 <script type="module">
