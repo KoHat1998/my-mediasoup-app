@@ -7,21 +7,19 @@
   <style>
     html,body{height:100%;margin:0;background:#0B0E19;color:#E9F2FF;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
     .wrap{display:flex;flex-direction:column;min-height:100%}
-    header{display:none}                 /* hide legacy header row */
+    header{display:none} /* hide legacy header row */
 
     /* let the video touch the edges */
     main{flex:0;padding:0;margin:0}
-
     #err{color:#ff8aa8;font-weight:600}
 
     /* Stage and HUD */
     .stage{position:relative;display:block;width:100vw}
-    /* Full-bleed video, no rounding */
     video{
       display:block;
       width:100vw;
       height:56.25vw;        /* 16:9 from width */
-      max-height:75vh;       /* leave room for chat below */
+      max-height:75vh;       /* leave room for chat below if needed */
       background:#000;
       border-radius:0;
       object-fit:cover;
@@ -43,8 +41,16 @@
     .counter .dot{width:6px;height:6px;border-radius:999px;background:#22c55e}
 
     /* Unmute overlay */
-
-
+    .unmute{
+      position:absolute; inset:0;
+      display:none; align-items:center; justify-content:center;
+      z-index:3; background:rgba(0,0,0,.25);
+    }
+    .unmute span{
+      background:#111; color:#fff; padding:10px 14px;
+      border-radius:999px; font-weight:700; font-size:14px;
+      border:1px solid rgba(255,255,255,.2);
+    }
   </style>
 </head>
 <body>
@@ -57,7 +63,7 @@
 
   <main>
     <div class="stage">
-      <video id="v" playsinline autoplay controls muted></video>
+      <video id="v" playsinline autoplay controls></video>
 
       <!-- HUD inside video area -->
       <div class="hud">
@@ -67,6 +73,11 @@
         </span>
       </div>
 
+      <!-- Unmute overlay (needed only if browser blocks autoplay-with-audio) -->
+      <div class="unmute" id="unmute" aria-label="Tap to unmute">
+        <span>🔊 Unmute</span>
+      </div>
+    </div> <!-- ✅ close .stage -->
   </main>
 
   <div id="err" style="padding:8px 14px;"></div>
@@ -106,6 +117,9 @@
   const passedTitle = qs.get('title') || slug;
   if ($title) $title.textContent = 'Title: ' + passedTitle;
 
+  // Start unmuted by default; if blocked, we'll show overlay
+  $v.muted = false;
+
   // Websocket-only transport (WebView-friendly)
   const socket = io('/', {
     transports: ['websocket'],
@@ -124,17 +138,24 @@
     if ($viewsTxt) $viewsTxt.textContent = String(n ?? 0);
   });
 
-  // Try unmute on any user gesture (mobile autoplay policy)
-  ['click','pointerdown','touchstart'].forEach(ev => {
-    window.addEventListener(ev, async () => {
-      try { $v.muted = false; await $v.play(); hideUnmute(); } catch {}
-    }, { passive:true });
-  });
-  if ($unmute) {
-    $unmute.addEventListener('click', async () => {
-      try { $v.muted = false; await $v.play(); hideUnmute(); } catch {}
-    });
+  // Helper: try to play unmuted; if blocked, show overlay
+  async function tryPlayUnmuted() {
+    try {
+      $v.muted = false;
+      await $v.play();
+      hideUnmute();
+    } catch {
+      showUnmute();
+    }
   }
+
+  // Retry on any user gesture (mobile autoplay policy)
+  ['click','pointerdown','touchstart'].forEach(ev => {
+    window.addEventListener(ev, tryPlayUnmuted, { passive:true });
+  });
+  if ($unmute) $unmute.addEventListener('click', tryPlayUnmuted);
+
+  // Keep overlay in sync if something mutes later
   $v.addEventListener('volumechange', () => {
     if ($v.muted || $v.volume === 0) showUnmute(); else hideUnmute();
   });
@@ -176,7 +197,7 @@
         ms.addTrack(consumer.track);
         $v.srcObject = ms;
 
-        try { await $v.play(); } catch { showUnmute(); }
+        await tryPlayUnmuted();
         return consumer;
       }
 
@@ -185,7 +206,7 @@
       try { await consume('audio'); } catch {}
 
       setLive('LIVE');
-      if ($v.muted) showUnmute();
+      await tryPlayUnmuted();
 
       // 5) React to producers appearing later
       socket.on('newProducer', async (p) => {
