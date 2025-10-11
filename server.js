@@ -48,7 +48,7 @@ app.use(express.urlencoded({ extended: false }));
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: (origin, cb) => cb(null, true),   // allow all origins (good for Flutter WebView)
+    origin: (origin, cb) => cb(null, true),   // allow all origins (Flutter WebView friendly)
     methods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
   }
@@ -95,8 +95,15 @@ function ensureLiveState(liveId){
   }
   return live.state;
 }
+function getOrCreateLiveFromHint(hint){
+  const bySlug = findLiveBySlug(hint); if (bySlug) return bySlug;
+  if (lives.has(hint)) return lives.get(hint);
+  const id = hint;
+  const live = { id, slug: hint, title: `Live ${hint}`, description: null, hostUserId: 'auto', isLive: true, createdAt: new Date().toISOString(), endedAt: null, state:null };
+  lives.set(id, live); ensureLiveState(id); console.log('ℹ️ created live from hint:', { id: live.id, slug: live.slug }); return live;
+}
 
-// ✅ NEW — helper to count viewers (excluding host)
+// ---------------- Viewer count helpers (👁) ----------------
 function getViewerCount(liveId) {
   const live = lives.get(liveId); if (!live?.state) return 0;
   const rn = live.state.roomName;
@@ -104,26 +111,15 @@ function getViewerCount(liveId) {
   let n = 0;
   for (const id of ids) {
     const s = io.sockets.sockets.get(id);
-    if (s?.data?.liveId === liveId && !s.data.isHost) n++;
+    if (s?.data?.liveId === liveId && !s.data.isHost) n++; // exclude broadcaster
   }
   return n;
 }
 
-// ✅ NEW — broadcast viewer count to everyone in the same live room
 function broadcastViewers(liveId){
   const live = lives.get(liveId); if (!live?.state) return;
   const rn = live.state.roomName;
-  const count = getViewerCount(liveId);
-  io.to(rn).emit('viewers', count);
-}
-
-// ✅ helper to create a live if missing
-function getOrCreateLiveFromHint(hint){
-  const bySlug = findLiveBySlug(hint); if (bySlug) return bySlug;
-  if (lives.has(hint)) return lives.get(hint);
-  const id = hint;
-  const live = { id, slug: hint, title: `Live ${hint}`, description: null, hostUserId: 'auto', isLive: true, createdAt: new Date().toISOString(), endedAt: null, state:null };
-  lives.set(id, live); ensureLiveState(id); console.log('ℹ️ created live from hint:', { id: live.id, slug: live.slug }); return live;
+  io.to(rn).emit('viewers', getViewerCount(liveId));
 }
 
 // ---------------- Auth helper ----------------
@@ -198,16 +194,15 @@ io.on('connection', (socket) => {
   const roomName = state.roomName;
   socket.join(roomName);
 
-  // ✅ broadcast viewer count on join
+  // 👁 broadcast viewer count on join
   broadcastViewers(liveId);
 
   const ok = (cb, payload='ok') => { try { (cb||(()=>{}))(payload); } catch(e) {} };
   const bad = (cb, msg) => ok(cb, { error: msg });
 
-  // ✅ allow client to request viewer count once (ack style)
+  // Allow client to request viewer count once (ack style)
   socket.on('getViewerCount', (_p, cb) => {
-    const count = getViewerCount(liveId);
-    ok(cb, { count });
+    ok(cb, { count: getViewerCount(liveId) });
   });
 
   socket.on('getRtpCapabilities', (_p, cb) => ok(cb, router.rtpCapabilities));
@@ -224,7 +219,7 @@ io.on('connection', (socket) => {
   socket.on('connectSendTransport', async ({ dtlsParameters }, cb) => {
     try {
       if (!socket.data.isHost) return bad(cb,'not host');
-      const t = (state.transports.get(socket.id)||{}).send; if (!t) return bad(cb,'no send transport');
+    const t = (state.transports.get(socket.id)||{}).send; if (!t) return bad(cb,'no send transport');
       await t.connect({ dtlsParameters }); ok(cb);
     } catch(e){ console.error('connectSendTransport', e); bad(cb,'connectSendTransport failed'); }
   });
@@ -290,7 +285,7 @@ io.on('connection', (socket) => {
       for (const c of list) { try { c.close(); } catch {} }
       state.consumersBySocket.delete(socket.id); state.videoConsumerBySocket.delete(socket.id);
     } catch {}
-    // ✅ broadcast viewer count on disconnect
+    // 👁 broadcast viewer count on leave
     broadcastViewers(liveId);
   });
 });
