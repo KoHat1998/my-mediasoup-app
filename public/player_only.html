@@ -5,75 +5,84 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Livenix • Player</title>
   <style>
-  html,body{height:100%;margin:0;background:#0B0E19;color:#E9F2FF;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
-  .wrap{display:flex;flex-direction:column;min-height:100%}
-  header{display:none}                 /* hide legacy header row */
+    html,body{height:100%;margin:0;background:#0B0E19;color:#E9F2FF;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+    .wrap{display:flex;flex-direction:column;min-height:100%}
+    header{display:none}                 /* hide legacy header row */
 
-  /* remove the side padding so the video can touch the edges */
-  main{flex:0;padding:0;margin:0}
+    /* let the video touch the edges */
+    main{flex:0;padding:0;margin:0}
 
-  footer{
-    padding:8px 14px;border-top:1px solid #1e2536;
-    display:flex;justify-content:space-between;font-size:12px;opacity:.85
-  }
-  #err{color:#ff8aa8;font-weight:600}
+    #err{color:#ff8aa8;font-weight:600}
 
-  /* Stage and HUD */
-  .stage{position:relative;display:block;width:100vw}
-  /* Full-bleed video, no rounded corners */
-  video{
-    display:block;
-    width:100vw;           /* fill the width of the WebView */
-    height:56.25vw;        /* 16:9 height based on width (100 / 16 * 9) */
-    max-height:75vh;       /* don't exceed 75% of viewport height (so chat fits) */
-    background:#000;
-    border-radius:0;       /* <-- no rounding */
-    object-fit:cover;      /* cover width cleanly */
-    position:relative; z-index:1;
-  }
+    /* Stage and HUD */
+    .stage{position:relative;display:block;width:100vw}
+    /* Full-bleed video, no rounding */
+    video{
+      display:block;
+      width:100vw;
+      height:56.25vw;        /* 16:9 from width */
+      max-height:75vh;       /* leave room for chat below */
+      background:#000;
+      border-radius:0;
+      object-fit:cover;
+      position:relative; z-index:1;
+    }
+    .hud{
+      position:absolute; right:8px; top:8px;
+      display:flex; gap:8px; align-items:center;
+      z-index:2; /* above video */
+    }
+    .pill{
+      background:#22c55e;color:#fff;padding:4px 10px;border-radius:999px;
+      font-weight:700;letter-spacing:.2px;font-size:12px
+    }
+    .counter{
+      background:rgba(0,0,0,.55);color:#fff;padding:4px 10px;border-radius:999px;
+      font-weight:600;font-size:12px;display:flex;align-items:center;gap:6px
+    }
+    .counter .dot{width:6px;height:6px;border-radius:999px;background:#22c55e}
 
-  .hud{
-    position:absolute; right:8px; top:8px;
-    display:flex; gap:8px; align-items:center;
-    z-index:2; /* above video */
-  }
-  .pill{
-    background:#22c55e;color:#fff;padding:4px 10px;border-radius:999px;
-    font-weight:700;letter-spacing:.2px;font-size:12px
-  }
-  .counter{
-    background:rgba(0,0,0,.55);color:#fff;padding:4px 10px;border-radius:999px;
-    font-weight:600;font-size:12px;display:flex;align-items:center;gap:6px
-  }
-  .counter .dot{width:6px;height:6px;border-radius:999px;background:#22c55e}
-</style>
-
+    /* Unmute overlay */
+    .unmute{
+      position:absolute; inset:0;
+      display:none; align-items:center; justify-content:center;
+      z-index:3; background:rgba(0,0,0,.25);
+    }
+    .unmute span{
+      background:#111; color:#fff; padding:10px 14px;
+      border-radius:999px; font-weight:700; font-size:14px;
+      border:1px solid rgba(255,255,255,.2);
+    }
+  </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <!-- kept for backward compatibility; hidden via CSS -->
     <span id="legacy-live" class="pill">CONNECTING…</span>
     <div id="title" style="font-weight:700">Viewer</div>
     <div style="margin-left:auto;opacity:.8" id="host"></div>
   </header>
 
   <main>
- <div class="stage">
-    <video id="v" playsinline autoplay controls muted></video>
-    <div class="hud">
-      <span id="live" class="pill">CONNECTING…</span>
-      <span id="views" class="counter" style="display:inline-flex">
-        <span class="dot"></span><span id="viewsTxt">0</span>
+    <div class="stage">
+      <video id="v" playsinline autoplay controls muted></video>
+
+      <!-- HUD inside video area -->
+      <div class="hud">
+        <span id="live" class="pill">CONNECTING…</span>
+        <span id="views" class="counter" style="display:inline-flex">
+          <span class="dot"></span><span id="viewsTxt">0</span>
         </span>
+      </div>
+
+      <!-- Unmute overlay -->
+      <div class="unmute" id="unmute" aria-label="Tap to unmute">
+        <span>🔊 Unmute</span>
       </div>
     </div>
   </main>
 
-  <footer>
-    <div id="err"></div>
-    <div><small>Tip: tap Unmute if audio is blocked.</small></div>
-  </footer>
+  <div id="err" style="padding:8px 14px;"></div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
@@ -90,14 +99,17 @@
   const $live     = document.getElementById('live');
   const $v        = document.getElementById('v');
   const $err      = document.getElementById('err');
-  const $title    = document.getElementById('title');   // might be hidden; guard
+  const $title    = document.getElementById('title'); // header hidden; guard anyway
   const $views    = document.getElementById('views');
   const $viewsTxt = document.getElementById('viewsTxt');
+  const $unmute   = document.getElementById('unmute');
 
   function setLive(text, bad=false){
     $live.textContent = text;
     $live.style.background = bad ? '#ff285f' : '#22c55e';
   }
+  function showUnmute(){ if ($unmute) $unmute.style.display = 'flex'; }
+  function hideUnmute(){ if ($unmute) $unmute.style.display = 'none'; }
 
   if (!slug) {
     setLive('NO SLUG', true);
@@ -125,6 +137,21 @@
     if ($viewsTxt) $viewsTxt.textContent = String(n ?? 0);
   });
 
+  // Try unmute on any user gesture (mobile autoplay policy)
+  ['click','pointerdown','touchstart'].forEach(ev => {
+    window.addEventListener(ev, async () => {
+      try { $v.muted = false; await $v.play(); hideUnmute(); } catch {}
+    }, { passive:true });
+  });
+  if ($unmute) {
+    $unmute.addEventListener('click', async () => {
+      try { $v.muted = false; await $v.play(); hideUnmute(); } catch {}
+    });
+  }
+  $v.addEventListener('volumechange', () => {
+    if ($v.muted || $v.volume === 0) showUnmute(); else hideUnmute();
+  });
+
   async function start() {
     try {
       setLive('CONNECTING…');
@@ -145,7 +172,7 @@
         emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err)
       );
 
-      // 3) Consume helper
+      // 3) Consume helper — attach both audio & video to SAME MediaStream
       async function consume(kind) {
         const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
         if (res?.error) throw new Error(res.error);
@@ -158,7 +185,11 @@
         });
         await emitAck('resume', { consumerId: consumer.id });
 
-        if (kind === 'video') $v.srcObject = new MediaStream([consumer.track]);
+        let ms = ($v.srcObject instanceof MediaStream) ? $v.srcObject : new MediaStream();
+        ms.addTrack(consumer.track);
+        $v.srcObject = ms;
+
+        try { await $v.play(); } catch { showUnmute(); }
         return consumer;
       }
 
@@ -167,19 +198,18 @@
       try { await consume('audio'); } catch {}
 
       setLive('LIVE');
+      if ($v.muted) showUnmute();
 
       // 5) React to producers appearing later
       socket.on('newProducer', async (p) => {
         try { await consume(p.kind); } catch {}
       });
 
-      // 👁 Get initial viewer count once after connecting
+      // 👁 initial viewer count
       try {
         const { count } = await emitAck('getViewerCount', null);
         if ($views)    $views.style.display = 'inline-flex';
-        if ($viewsTxt && typeof count === 'number') {
-          $viewsTxt.textContent = String(count);
-        }
+        if ($viewsTxt && typeof count === 'number') $viewsTxt.textContent = String(count);
       } catch (e) {
         console.warn('getViewerCount failed:', e?.message || e);
       }
