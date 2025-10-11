@@ -5,43 +5,49 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Livenix • Player</title>
   <style>
-    html,body{height:100%;margin:0;background:#0B0E19;color:#E9F2FF;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
-    .wrap{display:flex;flex-direction:column;min-height:100%}
+  html,body{height:100%;margin:0;background:#0B0E19;color:#E9F2FF;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+  .wrap{display:flex;flex-direction:column;min-height:100%}
+  header{display:none}                 /* hide legacy header row */
 
-    /* Hide legacy header row completely (kept in DOM for safety) */
-    header{display:none}
+  /* remove the side padding so the video can touch the edges */
+  main{flex:0;padding:0;margin:0}
 
-    main{flex:1;display:flex;align-items:center;justify-content:center;padding:12px}
-    footer{padding:8px 14px;border-top:1px solid #1e2536;display:flex;justify-content:space-between;font-size:12px;opacity:.85}
-    #err{color:#ff8aa8;font-weight:600}
+  footer{
+    padding:8px 14px;border-top:1px solid #1e2536;
+    display:flex;justify-content:space-between;font-size:12px;opacity:.85
+  }
+  #err{color:#ff8aa8;font-weight:600}
 
-    /* Stage and HUD */
-    .stage{position:relative;display:inline-block}
-    video{
-      width:min(100vw,100%);
-      max-height:75vh;
-      background:#000;
-      border-radius:12px;
-      position:relative;   /* create stacking context */
-      z-index:1;
-    }
-    .hud{
-      position:absolute; right:8px; top:8px;
-      display:flex; gap:8px; align-items:center;
-      z-index:2; /* ensure over video */
-    }
-    .pill{
-      background:#22c55e; color:#fff;
-      padding:4px 10px; border-radius:999px;
-      font-weight:700; letter-spacing:.2px; font-size:12px;
-    }
-    .counter{
-      background:rgba(0,0,0,.55); color:#fff;
-      padding:4px 10px; border-radius:999px;
-      font-weight:600; font-size:12px; display:flex; align-items:center; gap:6px;
-    }
-    .counter .dot{width:6px;height:6px;border-radius:999px;background:#22c55e}
-  </style>
+  /* Stage and HUD */
+  .stage{position:relative;display:block;width:100vw}
+  /* Full-bleed video, no rounded corners */
+  video{
+    display:block;
+    width:100vw;           /* fill the width of the WebView */
+    height:56.25vw;        /* 16:9 height based on width (100 / 16 * 9) */
+    max-height:75vh;       /* don't exceed 75% of viewport height (so chat fits) */
+    background:#000;
+    border-radius:0;       /* <-- no rounding */
+    object-fit:cover;      /* cover width cleanly */
+    position:relative; z-index:1;
+  }
+
+  .hud{
+    position:absolute; right:8px; top:8px;
+    display:flex; gap:8px; align-items:center;
+    z-index:2; /* above video */
+  }
+  .pill{
+    background:#22c55e;color:#fff;padding:4px 10px;border-radius:999px;
+    font-weight:700;letter-spacing:.2px;font-size:12px
+  }
+  .counter{
+    background:rgba(0,0,0,.55);color:#fff;padding:4px 10px;border-radius:999px;
+    font-weight:600;font-size:12px;display:flex;align-items:center;gap:6px
+  }
+  .counter .dot{width:6px;height:6px;border-radius:999px;background:#22c55e}
+</style>
+
 </head>
 <body>
 <div class="wrap">
@@ -53,14 +59,12 @@
   </header>
 
   <main>
-    <div class="stage">
-      <video id="v" playsinline autoplay controls muted></video>
-
-      <!-- Top-right HUD inside the video area -->
-      <div class="hud">
-        <span id="live" class="pill">CONNECTING…</span>
-        <span id="views" class="counter" style="display:inline-flex">
-          <span class="dot"></span><span id="viewsTxt">0</span>
+ <div class="stage">
+    <video id="v" playsinline autoplay controls muted></video>
+    <div class="hud">
+      <span id="live" class="pill">CONNECTING…</span>
+      <span id="views" class="counter" style="display:inline-flex">
+        <span class="dot"></span><span id="viewsTxt">0</span>
         </span>
       </div>
     </div>
