@@ -9,22 +9,24 @@
       height:100%; margin:0; padding:0;
       background:#0B0E19; color:#E9F2FF;
       font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      overflow:hidden;            /* no scrollbars around the player */
+      overflow:hidden; /* no scrollbars */
     }
     .wrap{display:flex;flex-direction:column;min-height:100%}
-    header{display:none}          /* hide legacy header row */
+    header{display:none} /* legacy header hidden */
 
-    /* video area uses whole width; no outside spacing */
+    /* video uses whole width; no outer spacing */
     main{flex:0;padding:0;margin:0}
-    #err{color:#ff8aa8;font-weight:600;padding:8px 14px}
+
+    /* hide error row by default so it doesn't add vertical space */
+    #err{display:none;color:#ff8aa8;font-weight:600;padding:0;margin:0}
 
     /* Stage and HUD */
     .stage{position:relative;display:block;width:100vw}
     video{
       display:block;
       width:100vw;
-      height:56.25vw;             /* 16:9 from width */
-      max-height:75vh;            /* leaves room for chat UI below in the app */
+      aspect-ratio:16/9;  /* exact 16:9, replaces fixed height */
+      height:auto;
       background:#000;
       border-radius:0;
       object-fit:cover;
@@ -45,7 +47,7 @@
     }
     .counter .dot{width:6px;height:6px;border-radius:999px;background:#22c55e}
 
-    /* Unmute overlay (only shown if autoplay with audio is blocked) */
+    /* Unmute overlay (only if autoplay-with-audio blocked) */
     .unmute{
       position:absolute; inset:0; display:none;
       align-items:center; justify-content:center;
@@ -64,7 +66,7 @@
     <div class="stage">
       <video id="v" playsinline autoplay controls></video>
 
-      <!-- HUD inside video area -->
+      <!-- HUD -->
       <div class="hud">
         <span id="live" class="pill">CONNECTING…</span>
         <span id="views" class="counter" style="display:inline-flex">
@@ -106,10 +108,16 @@
   }
   function showUnmute(){ if ($unmute) $unmute.style.display = 'flex'; }
   function hideUnmute(){ if ($unmute) $unmute.style.display = 'none'; }
+  function showErr(msg){
+    if (!$err) return;
+    $err.textContent = msg;
+    $err.style.display = 'block';
+    $err.style.padding = '8px 14px';
+  }
 
   if (!slug) {
     setLive('NO SLUG', true);
-    $err.textContent = 'Missing ?slug in URL';
+    showErr('Missing ?slug in URL');
     throw new Error('Missing slug');
   }
 
@@ -125,10 +133,10 @@
   socket.on('connect', start);
   socket.on('connect_error', (e) => {
     setLive('CONNECT ERROR', true);
-    $err.textContent = e?.message || String(e);
+    showErr(e?.message || String(e));
   });
 
-  // 👁 live updates when server broadcasts viewer count
+  // 👁 viewer count from server
   socket.on('viewers', (n) => {
     if ($views)    $views.style.display = 'inline-flex';
     if ($viewsTxt) $viewsTxt.textContent = String(n ?? 0);
@@ -209,7 +217,7 @@
 
     } catch (e) {
       setLive('ERROR', true);
-      $err.textContent = e?.message || String(e);
+      showErr(e?.message || String(e));
       console.error(e);
     }
   }
