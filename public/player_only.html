@@ -58,17 +58,16 @@
 <script type="module">
   import * as mediasoupClient from 'https://esm.sh/mediasoup-client@3';
 
-  // --- Query params from Flutter ---
   const qs   = new URLSearchParams(location.search);
   const slug = qs.get('slug') || qs.get('id') || qs.get('room') || '';
   const rawToken = qs.get('token') || '';
   const token = rawToken ? (/^Bearer\s/i.test(rawToken) ? rawToken : `Bearer ${rawToken}`) : '';
 
-  // --- DOM helpers ---
-  const $live  = document.getElementById('live');
-  const $v     = document.getElementById('v');
-  const $err   = document.getElementById('err');
-  const $title = document.getElementById('title');
+  const $live    = document.getElementById('live');
+  const $v       = document.getElementById('v');
+  const $err     = document.getElementById('err');
+  const $title   = document.getElementById('title');   // may be null now (header hidden)
+  const $viewsTxt= document.getElementById('viewsTxt');
 
   function setLive(text, bad=false){
     $live.textContent = text;
@@ -80,10 +79,11 @@
     $err.textContent = 'Missing ?slug in URL';
     throw new Error('Missing slug');
   }
-  $title.textContent = 'Title: ' + (new URLSearchParams(location.search).get('title') || slug);
 
+  // Guard: only set title if the element exists
+  const passedTitle = new URLSearchParams(location.search).get('title') || slug;
+  if ($title) $title.textContent = 'Title: ' + passedTitle;
 
-  // Use websocket only (WebView-friendly)
   const socket = io('/', {
     transports: ['websocket'],
     auth: { role: 'viewer', token, slug }
@@ -95,56 +95,52 @@
     $err.textContent = e?.message || String(e);
   });
 
+  // ✅ Update the HUD when server broadcasts viewer count
+  socket.on('viewers', (n) => {
+    $viewsTxt.textContent = String(n ?? 0);
+  });
+
   async function start() {
     try {
       setLive('CONNECTING…');
 
-      // 1) Router RTP caps with strict timeout handling
       const rtpCaps = await emitAck('getRtpCapabilities', null);
-
-      // Guard: caps must exist and include codecs
-      if (!rtpCaps || !Array.isArray(rtpCaps.codecs)) {
-        throw new Error('No RTP capabilities from server');
-      }
+      if (!rtpCaps || !Array.isArray(rtpCaps.codecs)) throw new Error('No RTP capabilities from server');
 
       const device = new mediasoupClient.Device();
       await device.load({ routerRtpCapabilities: rtpCaps });
 
-      // 2) Create recv transport
       const tInfo = await emitAck('createRecvTransport', null);
       const recvTransport = device.createRecvTransport(tInfo);
       recvTransport.on('connect', ({ dtlsParameters }, cb, err) =>
         emitAck('connectRecvTransport', { dtlsParameters }).then(cb).catch(err)
       );
 
-      // 3) Helper to consume a kind
       async function consume(kind) {
         const res = await emitAck('consume', { rtpCapabilities: device.rtpCapabilities, kind });
         if (res?.error) throw new Error(res.error);
-
         const consumer = await recvTransport.consume({
-          id: res.id,
-          producerId: res.producerId,
-          kind: res.kind,
-          rtpParameters: res.rtpParameters
+          id: res.id, producerId: res.producerId, kind: res.kind, rtpParameters: res.rtpParameters
         });
         await emitAck('resume', { consumerId: consumer.id });
-
         if (kind === 'video') $v.srcObject = new MediaStream([consumer.track]);
         return consumer;
       }
 
-      // 4) Try to start both; ok if one isn’t ready yet
-      try { await consume('video'); } catch (e) { console.warn('video not ready:', e?.message || e); }
-      try { await consume('audio'); } catch (e) { console.warn('audio not ready:', e?.message || e); }
+      try { await consume('video'); } catch {}
+      try { await consume('audio'); } catch {}
 
       setLive('LIVE');
 
-      // 5) React to new producers
       socket.on('newProducer', async (p) => {
-        try { await consume(p.kind); } catch (e) { console.warn('newProducer failed:', e?.message || e); }
+        try { await consume(p.kind); } catch {}
       });
 
+      // ✅ Get initial viewer count once after connecting (optional but nice)
+      try {
+        const { count } = await emitAck('getViewerCount', null);
+        if (typeof count === 'number') $viewsTxt.textContent = String(count);
+      } catch {}
     } catch (e) {
       setLive('ERROR', true);
       $err.textContent = e?.message || String(e);
@@ -152,7 +148,6 @@
     }
   }
 
-  // Strict ack with timeout → errors on timeout/no response
   function emitAck(event, payload) {
     return new Promise((resolve, reject) => {
       socket.timeout(8000).emit(event, payload, (err, res) => {
@@ -164,5 +159,7 @@
     });
   }
 </script>
+
+
 </body>
 </html>
