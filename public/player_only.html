@@ -5,21 +5,26 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Livenix • Player</title>
   <style>
-    html,body{height:100%;margin:0;background:#0B0E19;color:#E9F2FF;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+    html,body{
+      height:100%; margin:0; padding:0;
+      background:#0B0E19; color:#E9F2FF;
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      overflow:hidden;            /* no scrollbars around the player */
+    }
     .wrap{display:flex;flex-direction:column;min-height:100%}
-    header{display:none} /* hide legacy header row */
+    header{display:none}          /* hide legacy header row */
 
-    /* let the video touch the edges */
+    /* video area uses whole width; no outside spacing */
     main{flex:0;padding:0;margin:0}
-    #err{color:#ff8aa8;font-weight:600}
+    #err{color:#ff8aa8;font-weight:600;padding:8px 14px}
 
     /* Stage and HUD */
     .stage{position:relative;display:block;width:100vw}
     video{
       display:block;
       width:100vw;
-      height:56.25vw;        /* 16:9 from width */
-      max-height:75vh;       /* leave room for chat below if needed */
+      height:56.25vw;             /* 16:9 from width */
+      max-height:75vh;            /* leaves room for chat UI below in the app */
       background:#000;
       border-radius:0;
       object-fit:cover;
@@ -28,7 +33,7 @@
     .hud{
       position:absolute; right:8px; top:8px;
       display:flex; gap:8px; align-items:center;
-      z-index:2; /* above video */
+      z-index:2;
     }
     .pill{
       background:#22c55e;color:#fff;padding:4px 10px;border-radius:999px;
@@ -40,10 +45,10 @@
     }
     .counter .dot{width:6px;height:6px;border-radius:999px;background:#22c55e}
 
-    /* Unmute overlay */
+    /* Unmute overlay (only shown if autoplay with audio is blocked) */
     .unmute{
-      position:absolute; inset:0;
-      display:none; align-items:center; justify-content:center;
+      position:absolute; inset:0; display:none;
+      align-items:center; justify-content:center;
       z-index:3; background:rgba(0,0,0,.25);
     }
     .unmute span{
@@ -55,12 +60,6 @@
 </head>
 <body>
 <div class="wrap">
-  <header>
-    <span id="legacy-live" class="pill">CONNECTING…</span>
-    <div id="title" style="font-weight:700">Viewer</div>
-    <div style="margin-left:auto;opacity:.8" id="host"></div>
-  </header>
-
   <main>
     <div class="stage">
       <video id="v" playsinline autoplay controls></video>
@@ -73,14 +72,14 @@
         </span>
       </div>
 
-      <!-- Unmute overlay (needed only if browser blocks autoplay-with-audio) -->
+      <!-- Unmute overlay -->
       <div class="unmute" id="unmute" aria-label="Tap to unmute">
         <span>🔊 Unmute</span>
       </div>
-    </div> <!-- ✅ close .stage -->
+    </div>
   </main>
 
-  <div id="err" style="padding:8px 14px;"></div>
+  <div id="err"></div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>
@@ -97,7 +96,6 @@
   const $live     = document.getElementById('live');
   const $v        = document.getElementById('v');
   const $err      = document.getElementById('err');
-  const $title    = document.getElementById('title'); // header hidden; guard anyway
   const $views    = document.getElementById('views');
   const $viewsTxt = document.getElementById('viewsTxt');
   const $unmute   = document.getElementById('unmute');
@@ -114,10 +112,8 @@
     $err.textContent = 'Missing ?slug in URL';
     throw new Error('Missing slug');
   }
-  const passedTitle = qs.get('title') || slug;
-  if ($title) $title.textContent = 'Title: ' + passedTitle;
 
-  // Start unmuted by default; if blocked, we'll show overlay
+  // Start unmuted by default; if blocked, we’ll show the overlay
   $v.muted = false;
 
   // Websocket-only transport (WebView-friendly)
@@ -138,24 +134,15 @@
     if ($viewsTxt) $viewsTxt.textContent = String(n ?? 0);
   });
 
-  // Helper: try to play unmuted; if blocked, show overlay
+  // Try to play unmuted; if blocked by policy, show overlay
   async function tryPlayUnmuted() {
-    try {
-      $v.muted = false;
-      await $v.play();
-      hideUnmute();
-    } catch {
-      showUnmute();
-    }
+    try { $v.muted = false; await $v.play(); hideUnmute(); }
+    catch { showUnmute(); }
   }
-
-  // Retry on any user gesture (mobile autoplay policy)
   ['click','pointerdown','touchstart'].forEach(ev => {
     window.addEventListener(ev, tryPlayUnmuted, { passive:true });
   });
   if ($unmute) $unmute.addEventListener('click', tryPlayUnmuted);
-
-  // Keep overlay in sync if something mutes later
   $v.addEventListener('volumechange', () => {
     if ($v.muted || $v.volume === 0) showUnmute(); else hideUnmute();
   });
@@ -166,9 +153,7 @@
 
       // 1) Router RTP caps
       const rtpCaps = await emitAck('getRtpCapabilities', null);
-      if (!rtpCaps || !Array.isArray(rtpCaps.codecs)) {
-        throw new Error('No RTP capabilities from server');
-      }
+      if (!rtpCaps || !Array.isArray(rtpCaps.codecs)) throw new Error('No RTP capabilities from server');
 
       const device = new mediasoupClient.Device();
       await device.load({ routerRtpCapabilities: rtpCaps });
