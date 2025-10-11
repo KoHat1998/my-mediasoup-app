@@ -95,11 +95,29 @@ function ensureLiveState(liveId){
   }
   return live.state;
 }
-function broadcastViewers(liveId){
-  const live = lives.get(liveId); if (!live || !live.state) return;
-  const rn = live.state.roomName; const members = io.sockets.adapter.rooms.get(rn) || new Set();
-  io.to(rn).emit('viewers', members.size);
+
+// ✅ NEW — helper to count viewers (excluding host)
+function getViewerCount(liveId) {
+  const live = lives.get(liveId); if (!live?.state) return 0;
+  const rn = live.state.roomName;
+  const ids = io.sockets.adapter.rooms.get(rn) || new Set();
+  let n = 0;
+  for (const id of ids) {
+    const s = io.sockets.sockets.get(id);
+    if (s?.data?.liveId === liveId && !s.data.isHost) n++;
+  }
+  return n;
 }
+
+// ✅ NEW — broadcast viewer count to everyone in the same live room
+function broadcastViewers(liveId){
+  const live = lives.get(liveId); if (!live?.state) return;
+  const rn = live.state.roomName;
+  const count = getViewerCount(liveId);
+  io.to(rn).emit('viewers', count);
+}
+
+// ✅ helper to create a live if missing
 function getOrCreateLiveFromHint(hint){
   const bySlug = findLiveBySlug(hint); if (bySlug) return bySlug;
   if (lives.has(hint)) return lives.get(hint);
@@ -158,9 +176,6 @@ app.use((req, res, next) => {
 });
 app.use(express.static('public', { etag:false, lastModified:false, maxAge:0 }));
 
-// IMPORTANT: let the static file handle /player_only.html
-// (do NOT send an inline HTML string here)
-
 // ---------------- Socket.IO ----------------
 io.use((socket, next) => {
   const { role, token: raw, liveId: hintedLiveId, slug: hintedSlug } = socket.handshake.auth || {};
@@ -182,10 +197,18 @@ io.on('connection', (socket) => {
   const state = ensureLiveState(liveId);
   const roomName = state.roomName;
   socket.join(roomName);
+
+  // ✅ broadcast viewer count on join
   broadcastViewers(liveId);
 
   const ok = (cb, payload='ok') => { try { (cb||(()=>{}))(payload); } catch(e) {} };
   const bad = (cb, msg) => ok(cb, { error: msg });
+
+  // ✅ allow client to request viewer count once (ack style)
+  socket.on('getViewerCount', (_p, cb) => {
+    const count = getViewerCount(liveId);
+    ok(cb, { count });
+  });
 
   socket.on('getRtpCapabilities', (_p, cb) => ok(cb, router.rtpCapabilities));
 
@@ -267,6 +290,7 @@ io.on('connection', (socket) => {
       for (const c of list) { try { c.close(); } catch {} }
       state.consumersBySocket.delete(socket.id); state.videoConsumerBySocket.delete(socket.id);
     } catch {}
+    // ✅ broadcast viewer count on disconnect
     broadcastViewers(liveId);
   });
 });
