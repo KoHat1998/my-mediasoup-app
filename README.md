@@ -2,8 +2,8 @@
 
 1. **Clone the repo**  
 ```bash
-git clone https://github.com/KoHat1998/my-mediasoup-app.git
-cd my-mediasoup-app
+git clone https://github.com/KoHat1998/live_nix_Webapp.git
+
 ```
 
 2. **Install dependencies**  
