@@ -1,36 +1,3 @@
-# 🎥 KoHat Live – WebRTC Mediasoup App
-
-This is a simple **two-channel live streaming web app** built with **Node.js, Socket.IO, and Mediasoup**.  
-It lets one of two broadcasters go live (camera or screen) and allows multiple viewers to watch in real time.  
-
----
-
-## 🚀 Features  
-- Two broadcaster channels: `b1` and `b2`  
-- Live camera or screen sharing  
-- Real-time video/audio streaming using WebRTC + Mediasoup  
-- Viewer page with quality selector (Auto / High / Medium / Low)  
-- Live viewer count  
-- Responsive UI (desktop + mobile)  
-
----
-
-## 📂 Project Structure  
-```
-my-mediasoup-app/
-├── server.js          # Node.js + Express + Mediasoup backend
-├── public/
-│   ├── index.html     # Home page
-│   ├── login.html     # Broadcaster login
-│   ├── broadcaster.html # Broadcaster control panel
-│   ├── viewer.html    # Viewer page
-│   ├── broadcaster.js # Broadcaster-side WebRTC logic
-│   ├── viewer.js      # Viewer-side WebRTC logic
-│   ├── style.css      # UI styling
-```
-
----
-
 ## ⚙️ Installation  
 
 1. **Clone the repo**  
@@ -70,15 +37,7 @@ npm install -g pm2
 pm2 start server.js
 ```
 
----
 
-## 🔑 Login Credentials  
-- **Broadcaster 1** → username: `b1` | password: `changeme1`  
-- **Broadcaster 2** → username: `b2` | password: `changeme2`  
-
-*(you can change these in `server.js`)*  
-
----
 
 ## 📖 Notes  
 - Works best over **HTTPS** (for camera/mic access).  
